@@ -213,3 +213,4 @@ analysis_results/
 poetry.lock
 mats.ipynb
 test.ipynb
+.python-version
