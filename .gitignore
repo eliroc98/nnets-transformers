@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+ablation_data/
+analysis/
+analysis_results/
+
+poetry.lock
+mats.ipynb
+test.ipynb
