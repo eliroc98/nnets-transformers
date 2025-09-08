@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import json
 import torch.nn.functional as F
 import transformer_lens
 from transformer_lens import HookedTransformer, utils
@@ -22,7 +23,7 @@ import warnings
 
 # --- Local Imports ---
 # Assumes get_sentences.py is in the same directory
-from get_sentences import get_induction_data
+#from get_sentences import get_induction_data
 
 # Suppress unnecessary warnings from matplotlib
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -33,6 +34,8 @@ CONFIG = {
     "SEQUENCE_LENGTH": 300,       # Max sequence length for tokens
     "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
     "OUTPUT_DIR": "ablation_data", # Directory to save the raw data
+    "OUTPUT_DIR_IND": "ablation_data_induction",
+    "OUTPUT_DIR_LOSS": "ablation_data_loss",
 }
 
 # --- Ablation and Analysis Functions (largely from your script) ---
@@ -157,10 +160,10 @@ def get_zero_ablation_scores(model: HookedTransformer, tokens: Tensor, component
     temp_hook_fn = functools.partial(zero_ablation_hook, head_idx_to_ablate=head_idx_to_ablate)
     ablation_hook = (component_to_ablate, temp_hook_fn)
     
-    logits=model.run_with_hooks(tokens, fwd_hooks=[ablation_hook] + caching_hooks, return_type='logits')
+    logits, loss=model.run_with_hooks(tokens, fwd_hooks=[ablation_hook] + caching_hooks, return_type='both')
     model.reset_hooks()
     cache_dict_diffs['logit']=F.cosine_similarity(logits, clean_logits, dim=-1).mean().item()
-    return cache_dict_diffs
+    return cache_dict_diffs, logits[0][-1][2205].item(), loss.item()
 
 def plot_similarity_comparison(matrix_list: List[pd.DataFrame], save_path: str):
     """
@@ -235,10 +238,12 @@ def main():
     neighbors. The Durs"""
     
     available_checkpoints = available_checkpoints[::-1]
+    induction_scores={}
+    losses={}
     # 2. Process Each Sentence
     for i, checkpoint in enumerate(available_checkpoints[1:]):
         print(f"\n--- Processing Model {i+1}/{len(available_checkpoints)} ({checkpoint})---")
-
+        induction_scores[checkpoint],losses[checkpoint]={},{}
         model = HookedTransformer.from_pretrained("EleutherAI/pythia-14m", device = CONFIG['DEVICE'], revision=checkpoint)
         tokens = model.to_tokens(text, padding_side='left')
 
@@ -256,8 +261,9 @@ def main():
                 for head in range(model.cfg.n_heads):
                     component_dict[(c,head)]={'layer':layer, 'head':head}
         with torch.no_grad():
-            for (component_to_ablate, head_idx), info in component_dict.items():              
-                info['diffs'] = get_zero_ablation_scores(
+            for (component_to_ablate, head_idx), info in component_dict.items():
+                strid=f"{component_to_ablate}{'' if head_idx is None else '.'+str(head_idx)}"              
+                info['diffs'], induction_scores[checkpoint][strid], losses[checkpoint][strid] = get_zero_ablation_scores(
                     model=model,
                     tokens=tokens,
                     component_to_ablate=component_to_ablate,
@@ -274,6 +280,10 @@ def main():
         save_path = os.path.join(CONFIG['OUTPUT_DIR'], f'{checkpoint}.csv')
         df_sim.to_csv(save_path)
         print(f"Saved similarity matrix to {save_path}")
+        with open('induction_data.json', 'w', encoding='utf-8') as f:
+            json.dump(induction_scores, f, ensure_ascii=False, indent=4)
+        with open('loss_data.json', 'w', encoding='utf-8') as f:
+            json.dump(losses, f, ensure_ascii=False, indent=4)
     print("\nAnalysis complete.")
 
 if __name__ == "__main__":

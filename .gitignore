@@ -209,8 +209,12 @@ __marimo__/
 ablation_data/
 analysis/
 analysis_results/
+ablation_data_o/
 
 poetry.lock
 mats.ipynb
 test.ipynb
 .python-version
+
+induction_data.json
+loss_data.json
