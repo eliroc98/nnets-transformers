@@ -145,7 +145,7 @@ def get_random_ablation_scores(model: HookedTransformer, tokens: Tensor, compone
     return cache_dict_diffs
 
 def get_zero_ablation_scores(model: HookedTransformer, tokens: Tensor, component_to_ablate: str, components_to_cache:list, head_idx_to_ablate: int=None):
-    clean_logits, clean_cache = model.run_with_cache(tokens)
+    (clean_logits, clean_loss), clean_cache = model.run_with_cache(tokens, return_type='both')
     cache_dict_diffs = {}
     
     caching_hooks = []
@@ -163,7 +163,7 @@ def get_zero_ablation_scores(model: HookedTransformer, tokens: Tensor, component
     logits, loss=model.run_with_hooks(tokens, fwd_hooks=[ablation_hook] + caching_hooks, return_type='both')
     model.reset_hooks()
     cache_dict_diffs['logit']=F.cosine_similarity(logits, clean_logits, dim=-1).mean().item()
-    return cache_dict_diffs, logits[0][-1][2205].item(), loss.item()
+    return cache_dict_diffs, logits[0][-1][2205].item(), loss.item(), clean_logits[0][-1][2205].item(), clean_loss.item()
 
 def plot_similarity_comparison(matrix_list: List[pd.DataFrame], save_path: str):
     """
@@ -263,7 +263,7 @@ def main():
         with torch.no_grad():
             for (component_to_ablate, head_idx), info in component_dict.items():
                 strid=f"{component_to_ablate}{'' if head_idx is None else '.'+str(head_idx)}"              
-                info['diffs'], induction_scores[checkpoint][strid], losses[checkpoint][strid] = get_zero_ablation_scores(
+                info['diffs'],induction_scores[checkpoint][strid],losses[checkpoint][strid],induction_scores[checkpoint]['clean'],losses[checkpoint]['clean'] = get_zero_ablation_scores(
                     model=model,
                     tokens=tokens,
                     component_to_ablate=component_to_ablate,
