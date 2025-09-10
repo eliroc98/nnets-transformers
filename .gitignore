@@ -218,3 +218,5 @@ test.ipynb
 
 induction_data.json
 loss_data.json
+
+*.pickle
