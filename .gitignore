@@ -221,3 +221,6 @@ loss_data.json
 
 *.pickle
 *.csv
+
+# Paper repository
+/paper/
