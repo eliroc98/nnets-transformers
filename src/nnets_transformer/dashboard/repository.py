@@ -49,10 +49,11 @@ class Repository:
             if not root.exists():
                 problems.append({"path": str(root), "problem": "artifact root does not exist"})
                 continue
-            candidates = [root] if (root / "manifest.json").is_file() else sorted(p.parent for p in root.glob("*/manifest.json"))
+            candidates = [root] if (root / "manifest.json").is_file() else sorted(
+                p.parent for p in root.rglob("manifest.json") if not any(part.startswith(".") for part in p.relative_to(root).parts))
             for path in candidates:
                 try:
-                    entry = self._entry(path)
+                    entry = self._entry(path, root)
                 except (ValueError, KeyError, json.JSONDecodeError, OSError) as exc:
                     problems.append({"path": str(path), "problem": str(exc)})
                     continue
@@ -68,7 +69,7 @@ class Repository:
                 del self._cache[key]
         return catalog
 
-    def _entry(self, path):
+    def _entry(self, path, root=None):
         manifest_path = path / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         if manifest.get("schema_version") != SCHEMA:
@@ -90,7 +91,8 @@ class Repository:
         missing = [name for name in ("checkpoints", "components") if name not in tables]
         if missing:
             raise ValueError(f"missing required tables: {missing}")
-        return {"id": f"{path.name}-{sha[:10]}", "name": path.name, "path": str(path.resolve()), "manifest_sha256": sha,
+        name = str(path.relative_to(root)) if root is not None and path != root else path.name
+        return {"id": f"{name.replace('/', '__')}-{sha[:10]}", "name": name, "path": str(path.resolve()), "manifest_sha256": sha,
                 "manifest": manifest, "tables": tables, "legacy": bool(manifest.get("legacy", False)),
                 "limitations": manifest.get("limitations", [])}
 
@@ -136,6 +138,11 @@ class Repository:
             return frame
         key = "run_id" if name == "roles" else "trajectory_id"
         mask = frame[key] == trajectory_id
+        graph = self.entry(export_id)["manifest"].get("graph") or {}
+        if name == "edges" and graph.get("edges_threshold") is not None and equal.get("threshold") is not None:
+            # Slim exports store edges once at the highest threshold; lower thresholds are subsets.
+            threshold = equal.pop("threshold")
+            mask &= (frame.threshold == graph["edges_threshold"]) & (frame.similarity < threshold)
         for column, value in equal.items():
             if value is None:
                 continue

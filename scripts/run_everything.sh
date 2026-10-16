@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Every main Pythia model (14M-12B) x every available checkpoint x every task x every replacement.
 #
-#   scripts/run_everything.sh              # run (resumable: rerun the same command to continue)
+#   scripts/run_everything.sh              # run + export (resumable: rerun the same command to continue)
+#   scripts/run_everything.sh export       # refresh dashboard/analysis exports now (CPU; safe while running)
 #   DRY_RUN=1 scripts/run_everything.sh    # print the plan, checkpoint counts and disk estimates only
+#
+# Outputs: results runs/full/<model>/<checkpoint>/<task>/<replacement>/ (similarity matrix, per-example
+# behavior, manifests, per-example float16 cosine); exports exports/full/<model>/<task>/ (graph metrics,
+# roles, edges, behavior summaries) after each model, read by the dashboard.
 #
 # Run it inside tmux. Ctrl+C stops the current sweep cleanly (recorded as interrupted, resumable)
 # and does not start the next model. Settings (environment variables, with defaults):
@@ -50,7 +55,11 @@ EleutherAI/pythia-6.9b|pythia_2_8b|32|6857
 EleutherAI/pythia-12b|pythia_2_8b|36|11846
 "
 
+EXPORT_ROOT="${EXPORT_ROOT:-exports/full}"
 mkdir -p logs/run-everything "$OUTPUT_ROOT"
+if [ "${1:-}" = export ]; then
+    exec poetry run python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT"
+fi
 LOG="logs/run-everything/$(date +%Y%m%dT%H%M%S).log"
 exec > >(tee -i -a "$LOG") 2>&1
 echo "run_everything: log $LOG; output $OUTPUT_ROOT; replacements [$REPLACEMENTS]; scope $SCOPE; GPU $CUDA_VISIBLE_DEVICES"
@@ -134,6 +143,10 @@ for line in $CATALOG; do
         scope="$SCOPE" "sweep.checkpoints=$CK" "sweep.replacements=$REPLACEMENT_LIST" \
         sweep.output_root="$OUTPUT_ROOT" sweep.evict_checkpoint_cache=true sweep.compact="$MODE" "${RESUME[@]}"
     STATUS=$?
+    if [ "$STATUS" -eq 0 ] || [ "$STATUS" -lt 128 ]; then   # export whatever this model completed
+        poetry run python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT" --model "$SLUG" \
+            || echo "run_everything: export for $ID failed; retry with: scripts/run_everything.sh export"
+    fi
     if [ "$STATUS" -ne 0 ]; then
         echo "run_everything: $ID exited with $STATUS (logs/full-$SLUG/); rerun this script to resume it."
         [ "$STATUS" -ge 128 ] && STOP=1

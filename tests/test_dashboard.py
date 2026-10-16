@@ -92,6 +92,41 @@ class DashboardContracts(unittest.TestCase):
         clean = next(t for t in figure.data if t.name == "clean score")
         self.assertEqual(len(clean.y), 3)
 
+    def test_slim_export_matches_full_export(self):
+        from nnets_transformer.analysis.export import normalize
+        from nnets_transformer.config import Graph
+        from nnets_transformer.observability import Job
+        from nnets_transformer.dashboard.repository import Repository
+        runs = sorted(str(p.parent) for p in FIXTURE.glob("*/results/manifest.json"))
+        self.assertEqual(len(runs), 5)
+        with retained_directory() as tmp:
+            with Job("slim-export", root=Path(tmp) / "logs") as job:
+                normalize(runs, Path(tmp) / "exports" / "slim", Graph(resolution="component"), job, [.5, .7],
+                          include_activations=False, behavior_rows=False, slim=True)
+            slim = Repository([Path(tmp) / "exports"])
+            slim_id = next(iter(slim.catalog))
+            self.assertEqual(slim.catalog[slim_id]["name"], "slim")
+            for trajectory in (self.zero, self.mean):
+                a = self.repository.select(self.export_id, "components", trajectory, threshold=.5)
+                b = slim.select(slim_id, "components", trajectory, threshold=.5)
+                columns = ["step", "component", "metric", "value"]
+                order = ["step", "metric", "component"]
+                pd.testing.assert_frame_equal(a[columns].sort_values(order).reset_index(drop=True),
+                                              b[columns].sort_values(order).reset_index(drop=True))
+                a = self.repository.select(self.export_id, "edges", trajectory, threshold=.5)
+                b = slim.select(slim_id, "edges", trajectory, threshold=.5)
+                columns = ["step", "source", "target", "similarity", "strength"]
+                key = ["step", "source", "target"]
+                pd.testing.assert_frame_equal(a[columns].sort_values(key).reset_index(drop=True),
+                                              b[columns].sort_values(key).reset_index(drop=True))
+            rows = self.repository.table(self.export_id, "behavior")
+            summary = slim.table(slim_id, "behavior")
+            self.assertEqual(len(summary), rows.groupby(["run_id", "intervention_id"]).ngroups)
+            one = summary.iloc[0]
+            source = rows[(rows.run_id == one.run_id) & (rows.intervention_id == one.intervention_id)]
+            self.assertAlmostEqual(one.patched_score, source.patched_score.mean(), places=6)
+            self.assertEqual(one.sample_count, len(source))
+
     def test_four_level_trajectory_selection(self):
         from nnets_transformer.dashboard.app import trajectory_levels, cascade
         levels = trajectory_levels(self.repository.trajectories(self.export_id))
