@@ -1,0 +1,9 @@
+id: EleutherAI/pythia-31m
+# Immutable commit of the checkpoint branch. Sweeps resolve every checkpoint;
+# a single run may use revision: resolve (recorded as a SHA before execution).
+checkpoint: step1000
+revision: resolve
+tokenizer_revision: resolve
+n_layers: 6
+architecture: parallel
+cache_dir: models/hf-cache

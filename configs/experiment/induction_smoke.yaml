@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - override /task: induction
+  - override /scope: component
+command: run
+output_directory: runs/induction-smoke
+task:
+  examples: 2
+scope:
+  components:
+    - hook: hook_embed
+    - hook: blocks.0.attn.hook_q
+      head: 0
+    - hook: blocks.0.mlp.hook_post

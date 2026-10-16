@@ -1,0 +1,19 @@
+# @package _global_
+# Bounded development check for paper tasks: few examples, three interventions.
+defaults:
+  - override /task: ioi
+  - override /scope: component
+  - override /replacement: donor
+command: run
+output_directory: runs/paper-smoke
+task:
+  examples: 4
+  calibration_examples: 8
+execution:
+  backend: optimized
+scope:
+  components:
+    - hook: hook_embed
+    - hook: blocks.0.attn.hook_z
+      head: 0
+    - hook: blocks.0.mlp.hook_post

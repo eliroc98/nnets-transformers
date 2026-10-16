@@ -1,0 +1,5 @@
+# @package _global_
+command: export
+output_directory: exports/induction
+export:
+  inputs: [runs/induction-development]

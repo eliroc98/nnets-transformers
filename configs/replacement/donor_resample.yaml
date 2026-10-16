@@ -1,0 +1,7 @@
+# Dataset resampling: another equal-length evaluation example (never itself), seeded.
+name: donor
+estimator: exact
+direction: noising
+donor_policy: resample
+donor_seed: 43
+recovery_epsilon: 1.0e-6

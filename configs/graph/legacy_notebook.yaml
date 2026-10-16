@@ -1,0 +1,4 @@
+version: legacy-notebook-v1
+resolution: mixed
+similarity_threshold: 0.7
+epsilon: 1.0e-8

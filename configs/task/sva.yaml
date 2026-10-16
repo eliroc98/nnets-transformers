@@ -1,0 +1,6 @@
+name: sva
+scoring_version: tigges-2024-sva-v1
+examples: 200
+seed: 42
+calibration_examples: 64
+source_directory: artifacts/tigges-2024-source

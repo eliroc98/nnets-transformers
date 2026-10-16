@@ -1,0 +1,22 @@
+# @package _global_
+# Bounded sweep check: two checkpoints, two tasks, two replacements, few examples.
+defaults:
+  - override /scope: component
+command: sweep
+execution:
+  backend: optimized
+  example_batch_size: 2
+  intervention_batch_size: 8
+  examples_per_shard: 2
+scope:
+  components:
+    - hook: hook_embed
+    - hook: blocks.0.attn.hook_z
+      head: 0
+sweep:
+  checkpoints: [step512, step1000]
+  tasks: [induction, ioi]
+  replacements: [zero, donor]
+  output_root: runs/sweep-smoke
+  examples: 4
+  calibration_examples: 8

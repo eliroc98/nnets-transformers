@@ -1,0 +1,7 @@
+# Clean-to-corrupt recovery: patch the matched clean activation into the corrupt run.
+name: donor
+estimator: exact
+direction: denoising
+donor_policy: matched
+donor_seed: 43
+recovery_epsilon: 1.0e-6

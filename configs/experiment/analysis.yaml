@@ -1,0 +1,3 @@
+# @package _global_
+command: analyze
+output_directory: analysis_results/induction-v2

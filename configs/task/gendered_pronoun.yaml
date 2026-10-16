@@ -1,0 +1,6 @@
+name: gendered_pronoun
+scoring_version: tigges-2024-gendered_pronoun-v1
+examples: 70
+seed: 42
+calibration_examples: 12
+source_directory: artifacts/tigges-2024-source

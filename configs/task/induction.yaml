@@ -1,0 +1,7 @@
+name: induction
+scoring_version: induction-repeat-target-logprob-v1
+# Random-token repeated-prefix probe (project task, not a paper task).
+examples: 128
+calibration_examples: 64
+pattern_length: 8
+seed: 42

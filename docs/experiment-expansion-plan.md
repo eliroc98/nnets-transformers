@@ -1,0 +1,359 @@
+**Experiment expansion plan — 16 October 2026**
+
+Target: one H100 NVL (95,830 MiB reported memory). Primary objective: training progression across checkpoints. This is the design and persistent implementation record; see the checklist/handoff for implemented subsets. Historical outputs remain unchanged.
+
+**Research objectives and fresh-run scope — user clarification, 16 October 2026**
+
+The research questions remain those in [the paper source](../paper/main.tex), introduction and discussion:
+
+- **RQ1 — Structural signature:** does global influence-graph topology exhibit structured temporal regimes that align with the independently measured task-performance trajectory? Assess recurring structure across multiple graph descriptors, with metric-specific timing allowed.
+- **RQ2 — Role stability:** do the same components retain upper-tail graph-metric positions, or is prominence reassigned during training? Separate relative membership/rank stability from changes in absolute metric values; graph prominence alone does not establish a validated functional role.
+
+Run the expanded experiments afresh using corrected, explicitly versioned methods. The paper's historical numerical findings and phase boundaries are hypotheses/context, not expected outputs. No acceptance criterion requires matching previous matrices, scores, figures, components, or phases. Stop historical discrepancy investigation and environment archaeology for numerical matching; existing mismatch records remain archived and do not block implementation.
+
+Generate fresh dataset/pair manifests, checkpoint-specific calibration/donor/reference activations, intervention measurements, graphs, metrics, and figures in new run locations. Address the paper's stated limitations by testing multiple examples/tasks, model scales/training seeds, and zero/mean/donor replacements. Preserve source-model validation, small deterministic scoring/intervention controls, serial/optimized agreement within the new implementation, precision checks, and resume equivalence. Fresh execution must not require old result files or a comparison against them. Preserve legacy artifacts and versions for traceability/optional readers.
+
+Priority: T01–T04 are now complete; continue T05 sweep infrastructure and remaining T13 entry-point coverage. Full new experimental sweeps follow implementation validation under T05/T06. This clarification changes experimental acceptance, not the required environment, artifact preservation, or paper-task scoring contracts.
+
+**Required environment**
+
+Use the existing pyenv environment `nnets-transformer` at `/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer` (Python 3.11.1). Poetry manages dependencies in that activated environment; it must not create another virtualenv. The repository's `.python-version` selects the pyenv name, and project-local `poetry.toml` sets `virtualenvs.create = false` and `virtualenvs.in-project = false`.
+
+Select the exact environment in every new shell/tool process by setting `PYENV_VERSION=nnets-transformer`, `VIRTUAL_ENV` to the required absolute path, prepending its `bin` directory to `PATH`, and setting `POETRY_VIRTUALENVS_CREATE=false`. The bundled activation script contains a stale path, so use these exports instead of sourcing it. Verify both `VIRTUAL_ENV` and the Poetry Python's resolved `sys.prefix` before dependency changes. See [README setup](../README.md) and [agent guidance](../AGENTS.md) for commands. Apply this requirement to all implementation milestones, tests, notebooks, experiments, and dashboard work. Record this interpreter and actual dependency versions in run manifests; preserve the baseline lockfile unless a deliberate dependency change is needed.
+
+**Progress tracking across sessions**
+
+The implementation TODO checklist and session handoff notes at the end of this document are the persistent progress record. Read them at the start of every session. Whenever a TODO item is done, immediately mark it `[x]`, add a short completion note listing changed files/artifacts and validation, and refresh the handoff before starting the next item. Do not wait until the session ends to update progress.
+
+Keep incomplete items unchecked and document partial work, remaining steps, blockers, and the next action. Split large items into smaller checklist items when useful, keeping stable IDs and completed history. Before a session ends or reaches its context/token limit, save the latest handoff, including experiment output paths and resume commands where relevant. Completion requires the stated acceptance criteria; planning or starting an item is not completion. The next session must reconcile these notes with the working tree and saved artifacts before resuming.
+
+**Findings in the current code**
+
+`main.py` combines model loading, checkpoint discovery, one hard-coded passage, intervention hooks, scores, plotting, and persistence. The behavioral score directly reads vocabulary index 2205. Sentence-count and sequence-length settings do not drive dataset preparation in the execution loop.
+
+The largest evident inefficiency is recomputing the clean forward and unrestricted activation cache for every intervention. For K interventions on an example batch, reuse reduces approximately 2K forwards to K+1, before intervention batching. Mean and donor policies require additional reference passes. Many per-head hooks and `.item()` calls also cause Python overhead and GPU synchronization.
+
+Scientific definitions need explicit versions:
+
+- `graphs.py` passes `1 - similarity` into a function that transforms it again. The notebook transforms once, producing different edge strengths.
+- The notebook uses strength as shortest-path distance. Separate these attributes and declare incoming/outgoing directed closeness.
+- Nodes are inserted through retained edges, dropping isolated components. Report complete-inventory and active-node statistics separately.
+- Strict layer comparisons drop within-layer relations. Actual computational ordering differs across sequential blocks and parallel attention/MLP blocks such as Pythia's.
+- Module and head nodes overlap. Provide separate resolutions for architecture comparisons.
+- Reversed/sliced branch discovery should become numeric checkpoint selection with explicit initialization handling.
+- There are 153 stored matrices and scored checkpoints. Reconcile the historical manifest with the paper's count and parameter-count convention.
+
+These are inspection findings, not GPU benchmark results.
+
+**Proposed package**
+
+```text
+src/nnets_transformer/
+  cli.py                    # run, sweep, inspect, analyze, export
+  config.py                 # typed schemas and validation
+  records.py                # shared example/component/intervention/result records
+  observability.py          # shared console/file/JSON event logging
+  models/
+    base.py                 # adapter protocol and capabilities
+    transformer_lens.py     # initial backend
+    checkpoints.py          # discovery and immutable manifests
+    components.py           # canonical IDs, axes, computational ordering
+  tasks/
+    base.py                 # prepare, pair, collate, scoring specification
+    induction.py
+    ioi.py
+    gendered_pronoun.py
+    agreement.py
+    greater_than.py
+    multiple_choice.py      # optional Appendix E benchmarks; explicit scoring mode
+  interventions/
+    replacements.py         # zero, calibrated mean, donor activations
+    selectors.py            # existing components and eligible attention heads
+    scopes.py               # whole-component and attention-head execution
+    donors.py               # selection, alignment, exclusions
+  metrics/
+    behavioral.py           # task-specific logit/probability differences
+    activation.py
+    head_diagnostics.py     # optional observation-only Appendix D scores
+  execution/
+    runner.py               # load once per checkpoint
+    reference.py            # simple serial implementation
+    batching.py             # example and intervention microbatches
+    cache.py                # selective caches and streaming means
+    artifacts.py            # manifests, result shards, atomic resume
+    profiling.py
+    progress.py             # honest counters, heartbeat, atomic status
+  analysis/
+    graphs.py               # one graph implementation
+    centrality.py
+    longitudinal.py
+    figures.py
+  dashboard/                # CPU artifact reader; linked Plotly/Dash views
+    app.py
+    repository.py
+    state.py
+    figures.py
+    callbacks.py
+    views/
+configs/
+  config.yaml
+  dashboard.yaml            # artifact roots, local serving, cache/display limits
+  model/
+  task/
+  replacement/
+  scope/                    # component and head
+  graph/
+  resources/h100.yaml
+  experiment/               # reproduction, pilot, scaling, OLMo replication
+notebooks/                  # exploration consuming saved artifacts
+tests/                      # validation of scientific/execution contracts
+```
+
+Use Hydra with structured dataclass schemas for composed YAMLs and CLI overrides. Save fully resolved configuration and control working-directory behavior. Group sweep jobs by checkpoint so tasks and methods reuse loaded weights.
+
+Use explicit registries. A new task needs a module, registration, a YAML, and validation fixtures. Another scale in a supported architecture normally needs configuration and a checkpoint manifest. A new architecture may need component mappings and adapter validation.
+
+| Boundary | Responsibility |
+|---|---|
+| Task | Stable example IDs, prompts/token sequences, answer/contrast candidates, semantic roles, splits and pairing |
+| Prepared batch | Tokens, masks, actual prediction positions, candidate IDs, scoring masks and donor alignment |
+| Model adapter | Loading, tokenization, canonical components, hook mapping, tensor axes/shapes, ordering and capabilities |
+| Replacement | Required reference activations/statistics and replacement construction |
+| Intervention | Existing source component, optional attention-head index, replacement and direction; applied across all sequence positions |
+| Metrics | Scoring positions, reductions, sign conventions and baseline requirements |
+| Runner | Cache planning, batching, execution, artifacts and resume |
+| Analysis | Graphs, thresholds, centrality, uncertainty and figures |
+| Dashboard | Read-only artifact queries, linked training views, comparisons, component drill-down, exports and saved view state |
+
+Keep intervention scopes to the two supported by the current code: a whole hooked component output, or one attention head at an eligible attention hook. Both apply across all sequence positions, using the existing component inventory. Represent head selection with an optional head index; an absent index selects the entire component. Task scoring positions and donor token alignment do not define additional intervention scopes.
+
+Keep hook strings out of tasks and task-specific answer logic out of the runner. Validate incompatible sites, references, shapes, tokenization and revisions early. Keep query and key/value head counts distinct for grouped-query attention.
+
+The lockfile records TransformerLens commit `50ee38b9a20695e90b8ce6a4aa20fd509c8175d9`, while the dependency declaration tracks Git HEAD. Pin the baseline explicitly. Evaluate newer bridge APIs behind the adapter with clean-logit and intervention checks before adoption. [Official migration documentation](https://transformerlensorg.github.io/TransformerLens/content/migrating_to_v3.html).
+
+**Illustrative YAML, not an implemented interface**
+
+```yaml
+defaults:
+  - model: pythia_160m
+  - task: induction
+  - replacement: mean
+  - scope: component
+  - graph: head
+  - resources: h100
+  - _self_
+
+seed: 42
+checkpoints:
+  policy: explicit
+  steps: [0, 128, 512, 1000, 4000, 10000, 40000, 80000, 143000]
+  resolve_to_commit: true
+dataset:
+  evaluation_examples: 128
+  calibration_examples: 256
+  max_length: 128
+  split_seed: 42
+replacement:
+  reduction_axes: [example]
+  alignment: semantic_role
+  exclude_padding: true
+  calibration_split: calibration
+metrics:
+  primary: ${task.primary_metric}
+  behavioral: [accuracy, target_log_probability]
+  activation: [cosine_similarity, relative_l2_change]
+execution:
+  dtype: bfloat16
+  reduction_dtype: float32
+  example_batch_size: 8
+  intervention_batch_size: 4
+  inference_mode: true
+  resume: true
+graph:
+  similarity_thresholds: [0.1, 0.3, 0.5, 0.7]
+  include_isolated_nodes: true
+output:
+  root: runs
+  save_full_activations: false
+```
+
+Batch sizes are profiling inputs. Component/head selectors belong in scope configs; semantic token mappings belong in task/donor preparation. Mean statistics depend on checkpoint, hook, head, position convention, and dataset split. Each task config declares its primary metric; IOI/pronouns use logit difference, whereas the paper-faithful agreement/greater-than configs use full-vocabulary probability differences with group sums.
+
+**Patching methods**
+
+The existing procedure is exact zero activation ablation. Gradient attribution patching is a different estimator requiring backward computation. Separate replacement value, intervention scope, and exact/approximate estimation.
+
+| Replacement | Definition | Question |
+|---|---|---|
+| Zero | Replace the selected activation with zero | Sensitivity to this perturbation |
+| Mean | Replace with an activation mean from a fixed calibration split | Effect of removing example-specific information relative to a typical activation |
+| Dataset resampling | Replace with another eligible example's activation | Effect under the declared donor distribution |
+| Matched counterfactual | Replace with a minimally changed paired example's activation | Which components transmit the controlled difference? |
+
+Mean ablation should average across examples using aligned positions, with semantic alignment where needed, while replacing the full sequence of the selected component or head. Averaging over positions is a different replacement-value condition, not an additional intervention scope. Exclude padding, keep calibration/evaluation splits disjoint, stream FP32 sums/counts, and avoid conditioning on evaluation answers. Means can still be off-manifold.
+
+Persist donor IDs, prevent self-donation, declare donor pools, validate full-sequence alignment for the selected component/head, and repeat resampling with fixed donor seeds. Keep pairs fixed across checkpoints; recompute activations at each checkpoint. Cross-model activations are incompatible by default. Distinguish unrelated resampling from controlled counterfactual pairs.
+
+Implement donor/corrupt-to-clean damage and clean-to-corrupt recovery. Save raw clean, corrupt and patched scores. Optional normalized recovery is `(patched - corrupt) / (clean - corrupt)` for higher-is-better metrics; mark it undefined for negligible baseline gaps and retain values outside [0, 1]. Early checkpoints often lack baseline competence.
+
+Component/head patching affects downstream consumers. Observing downstream hooks measures propagated influence through potentially many mediators. Graph edges summarize these measured effects; they are observations, not additional intervention scopes.
+
+Corruption and metric choices can materially change patching conclusions. [Zhang and Nanda, activation-patching best practices](https://arxiv.org/abs/2309.16042). Keep random-weight replacement as a later robustness control.
+
+**Optimization for one H100**
+
+1. Establish a serial reference and representative profiling cases. Separate loading/downloads, steady-state GPU time, forward counts, peak memory, CPU analysis and disk size. Warm up; synchronize at timing boundaries.
+2. Use evaluation and inference mode for exact patching. Reuse clean caches/scores per checkpoint and example batch. Bound live caches to a batch; load each checkpoint once for its tasks/methods.
+3. Cache only required hooks, preserving the sequence positions needed for the existing activation comparisons. Task-specific output scoring can select prediction positions without changing the intervention scope. Avoid sequence-squared attention patterns/scores unless needed. Avoid every head's residual-width output when a smaller site or selected on-demand projection suffices.
+4. Vectorize head/position metrics, reduce on GPU and transfer compact results after chunks. Remove `.item()` from hooks. Preserve per-example measurements before aggregation.
+5. Batch independent interventions into separate replicated-example slices with an explicit example/intervention map. Each slice gets its own intervention. Simultaneously ablating several sites in one example measures a different quantity. Tune both batch dimensions jointly.
+6. Benchmark BF16 execution with FP32 metrics/means against FP32 references. Check edge membership near thresholds and centrality ranking stability. Record precision and attention implementation.
+7. Reuse tokenization for an immutable tokenizer revision, bucket lengths, mask padding and disable generation KV caching for full-prefix forwards.
+8. Write atomic result partitions and resume by checkpoint/task/method/example shard/intervention range. Download selected revisions only and bound disk cache.
+9. Recompute graph views, thresholds, centrality and figures from saved measurements. Profile approximate betweenness for large graphs and label its use; bound CPU workers.
+10. Evaluate fused attention only when requested hooks execute with equivalent semantics. Benchmark compilation, CUDA graphs and suffix-only recomputation later, since dynamic instrumentation affects correctness and benefit.
+
+For K interventions and T observation targets, one intervened forward can observe all T targets: K×T forwards are unnecessary. Comparison work and saved effects still scale with K×T. Batching improves utilization but still computes replicated examples.
+
+BF16 weights alone use approximately 2 bytes per parameter, about 24 GB for 12B. Activations, logits, buffers and batching need additional memory. Large models are plausible, but measured runtime should justify exhaustive fine-grained checkpoint sweeps. Quantization changes the studied computation and belongs in a separate condition.
+
+**Models, prioritized for longitudinal research**
+
+| Priority | Models | Purpose |
+|---|---|---|
+| Core | Pythia 14M, 31M, 70M, 160M, 410M, 1B | Small-to-medium longitudinal scaling |
+| Larger extension | Pythia 1.4B, 2.8B, 6.9B, 12B | Persistence at larger scales, after profiling |
+| Replication | Extra Pythia training seeds at selected small sizes | Reproducibility across training runs |
+| Second family | OLMo 2 1B, then 7B; 13B after compatibility/cost checks | Independent family and training trajectories |
+| Later final-model controls | GPT-2 small/medium; Qwen2.5 base 0.5B/1.5B/3B | Behavioral and architecture controls |
+
+Pythia's original eight-scale suite used matching data order and exposes intermediate weights. Extra seeds are documented for smaller sizes; verify checkpoint histories per seed. Check provenance of later 14M/31M releases and exact historical revisions. Keep release generation and data variant consistent. [Pythia repository](https://github.com/EleutherAI/pythia), [14M model card](https://huggingface.co/EleutherAI/pythia-14m).
+
+OLMo 2 exposes stage/step/token-count revisions. Start with stage 1; later stages change data distributions and include separate ingredients. Verify conversion and adapter support before sweeps. [Model card](https://huggingface.co/allenai/OLMo-2-0425-1B), [checkpoint documentation](https://github.com/allenai/OLMo/blob/main/docs/Checkpoints.md).
+
+Compare training tokens, normalized progress and competence alongside raw steps. Family differences also include tokenizer, data and optimizer differences. Use matched graph resolutions and relative depth; head IDs do not imply correspondence across independent runs. Report density relative to admissible architecture pairs alongside conventional density.
+
+**Forward-only NLP tasks and the Tigges et al. experimental setting**
+
+Add the four core tasks from [Tigges et al., NeurIPS 2024](https://proceedings.neurips.cc/paper_files/paper/2024/file/47c7edadfee365b394b2a3bd416048da-Paper-Conference.pdf) as a `tigges_2024` preset, alongside induction. The [detailed task and appendix scoring specification](tigges-2024-task-protocols.md) records formulas, source-code checks, dataset construction, reproduction differences, and validation requirements.
+
+| Task | Paper examples | Construction and paired corruption | Primary score |
+|---|---:|---|---|
+| Induction (existing project task) | Separate project config | Repeated patterns; vary distance/distractors and retain the current passage fixture | Correct-token margin/log-probability; repeat-position loss |
+| IOI | 70 | Mixed entity-tracking templates; swap the repeated subject name | Correct-name minus distractor-name logit |
+| Gendered pronouns | 70 | Name-substituted pairs with opposite he/she continuations; include both target directions | Target-pronoun minus alternate-pronoun logit |
+| Greater-than | 200 | Year-range completion; corrupt the start-year suffix to `01` | Probability mass on suffixes strictly above the original year minus mass on suffixes at or below it |
+| Subject–verb agreement (SVA) | 200 | Matched singular/plural-subject prefixes | Total agreeing-verb probability minus total disagreeing-verb probability |
+
+Compute probabilities with softmax over the full vocabulary. Both greater-than and SVA use sums within answer groups, not group means or a candidate-only softmax. SVA uses sets of verb forms from the source verb list; the earlier proposed two-verb logit margin remains a separately labeled optional variant. Keep clean target definitions fixed when scoring corrupt and patched runs. Preserve per-example results and average by example count. The source supplement confirms these reductions in `utils/metrics.py` and the circuit/task constructors.
+
+A separate paper-sized preset is necessary: the pronoun CSV has 100 rows despite the paper's reported 70, and some behavioral helpers use 1,000 examples instead of the circuit scripts' 70/200/200. Specify sample IDs, seeds, source hashes, candidate sets, and model preprocessing flags. Do not claim exact subset replication where the original selection is unknown.
+
+Appendix D defines additional head-function scores: previous-token attention, duplicate-token attention, induction/prefix matching, top-five copy score, and succession score. Add these as optional observation-only diagnostics, with explicit axes, eligible positions, normalization, candidate universe, and tie policy. They are separate from task performance and cosine influence. The detailed specification also records CSPA's KL-ratio score and Appendix A's path-based effect ratios for interpretation; those intervention procedures are outside the retained component/head replacement setting.
+
+Appendix E additionally evaluates SciQ, PIQA, WinoGrande, and ARC Easy. Include optional behavioral task entries, with choice accuracy, pending recovery of the original evaluation-harness/prompt/scoring configuration. Multi-token choice likelihood can use teacher-forced forward inference; a single-token answer-label format is a different, explicitly labeled adaptation. Keep these benchmarks out of the strict-next-token preset until their scoring contract is declared.
+
+Contextual associative recall and factual recall remain later project extensions. BLiMP-inspired shared-prefix agreement contrasts can be a supplementary variant; they do not substitute for the paper's SVA dataset and group-probability metric. [BLiMP repository](https://github.com/alexwarstadt/blimp).
+
+Strict next-token scoring requires tokenizer-aware validation of spaces, suffix boundaries, numeric continuations, candidate lengths, and prediction positions. Derive token IDs from validated strings instead of carrying Pythia IDs across families. Use a common valid subset where possible and report exclusions. A tokenizer incompatible with the exact year-suffix protocol needs an unsupported-task result or an explicitly labeled adaptation.
+
+Tasks require no training or autoregressive generation. Patching needs baseline, reference/donor, and intervened forwards; interventions stay whole-component or individual-head across all positions. Separate calibration, pilot, and evaluation samples; hold evaluation examples fixed across checkpoints. Report chance-level early/tiny models rather than filtering them away.
+
+**Measurements and artifacts**
+
+Separate behavioral effects from activation propagation. Cosine misses rescaling; add relative activation change and zero-norm diagnostics. Raw logits support historical reproduction but have limited cross-model comparability.
+
+Save unthresholded per-example measurements or reconstructable shards. Thresholding mean similarity and averaging edge presence are different estimands; declare the choice. Bootstrap examples, treat donor repeats as nested observations, and use training seeds for between-run variability.
+
+For the compatibility graph, strength is `1 - cosine_similarity`, potentially in [0, 2]. Give shortest-path metrics separate positive distance, initially `1 / (strength + epsilon)`, with sensitivity analysis and unweighted comparisons. Keep signed behavioral effects separate. Version graph ordering, node inventory and distance conventions.
+
+Record resolved YAML, model/tokenizer commits, stage/step/tokens, code commit and dirty state, dependencies, hardware/dtype, dataset hashes, training/evaluation/donor seeds, split/pair manifests, component inventory, schema versions, profiling and completion status. Use partitioned Parquet plus JSON/YAML, with CSV/pickle exporters for existing figures. Full activations are opt-in.
+
+Existing paper phase boundaries remain historical annotations. Identify new candidate transitions on pilot data or with a declared change-point procedure, then validate on held-out examples/runs. Do not transfer Pythia-14M step boundaries directly to other models.
+
+**Source-only version-control policy**
+
+Keep source, cleared-output notebooks, experiment configs, curated small text inputs/fixtures, documentation, and Poetry/environment selection files eligible for Git. Retain `poetry.lock` for reproducible dependency resolution. Ignore generated experiment/analysis/dashboard outputs, logs, downloads, weights, caches and serialized results through root-anchored directories and artifact patterns. Do not hide the planned `src/nnets_transformer/analysis/` or `models/` packages. Preserve local artifacts when removing generated files from tracking; notebook output archives live under ignored `artifacts/`. Runtime manifests/logs remain local while source recipes, config definitions and dataset/version hashes are retained for reproduction.
+
+**Persistent logging and process visibility**
+
+Treat [logging and live progress](logging-plan.md) as a required cross-cutting capability, tracked by T13. Every experiment, analysis/export, dashboard process, and substantive validation command must leave logs. Use `logs/<run-or-job-id>/<attempt-id>/` for readable `console.log`, append-only `events.jsonl`, an atomic `status.json`, and invocation/configuration references. Print paths at startup and retain previous attempt histories, including resumed or failed attempts.
+
+Log startup/environment/configuration, checkpoint/data preparation, baselines/calibration/donors, intervention counts, scientific summaries, analysis, artifact commits, resume/skips, warnings/retries, full exceptions, exit status, and completion. Provide progress and lightweight heartbeat updates at a configurable default 10-second interval where feasible, distinguishing liveness from actual work advancement. Counters, elapsed time, throughput and ETA must be honest; missing totals remain unknown. Keep overhead outside GPU hooks and hot loops.
+
+Initialize shared logging during T02 before new long-running sweeps in T05/T06. For earlier legacy/reproduction commands, use the README's unbuffered stdout/stderr capture recipe. Add a dashboard status/log panel in T09/T12 that reads bounded log tails and status records on CPU. Validate success, deliberate failure, quiet phases, interruption, concurrent attempts, and resume; persist command outputs and validation evidence for future sessions. Shared attempt logging is implemented for the new package CLI/reference and a subprocess wrapper; root legacy scripts still provide only terminal output unless wrapped/captured. Full T13 integration remains pending.
+
+**Interactive dashboard for training metrics**
+
+Build a local Plotly Dash dashboard following the [dashboard specification](dashboard-plan.md). Its first version reads existing saved results on CPU, with linked training-step trajectories for node/edge counts, density, component strengths/centralities, and behavioral scores. A shared checkpoint selection drives rankings, distributions, and pinned-component trajectories. Later views compare compatible runs, expose role turnover/Jaccard/layer occupancy, and show bounded directed graphs and checkpoint differences with stable layouts.
+
+Keep dashboard data access separate from experiment execution. Add legacy artifact import plus the new manifest/Parquet contract, preserve graph/scoring definitions, and display missing metrics or provenance explicitly. Tokens-seen axes require metadata; initialization and irregular/missing checkpoints need deliberate handling. Interactive filtering and graph display limits must not silently change the meaning of full-graph metrics.
+
+Plan optional dashboard dependencies, bounded server-side caching, lazy graph loading, exportable tables/charts/view state, and CPU/browser validation. The metrics MVP can use legacy results before expanded sweeps; network exploration follows once source/target identities are available. T09–T12 track this work independently from T01–T08, with acceptance criteria and performance targets in the linked specification. Browsing results never launches model inference, and the retained intervention scopes remain unchanged.
+
+**Implementation TODO checklist and acceptance criteria**
+
+- [x] D01 — Prepare the plan, README, and agent guidance; retain only existing component/head scopes; establish the persistent TODO and handoff workflow. Validate documentation links, formatting, and checklist consistency. Completion: README.md, AGENTS.md, and this plan are updated; local links, balanced code fences, whitespace, and unique checklist IDs were checked.
+- [x] D02 — Read Tigges et al. (NeurIPS 2024), including appendices and the official code supplement; add their task protocols, scoring definitions, implementation TODOs, and replication notes to the experimental setting. Completion: added `docs/tigges-2024-task-protocols.md` and updated this plan, README.md, and AGENTS.md. Checked local links, code fences, whitespace, TODO consistency, metric signs/group sums/year boundaries/recovery with fixed numerical examples, and source softmax/group-sum definitions. Experiment implementation remains pending.
+- [x] D03 — Plan the interactive training-metrics dashboard, including linked views, artifact contracts, performance, implementation stages, and validation. Completion: added `docs/dashboard-plan.md`, integrated T09–T12, and updated README.md and AGENTS.md. Checked local links, code fences, whitespace, unique TODO IDs, and legacy metric/edge-export assumptions against notebook source. Dashboard implementation remains pending.
+- [x] D04 — Configure the existing `nnets-transformer` pyenv environment and Poetry dependency management without virtualenv creation. Completion: added `.python-version` and project-local `poetry.toml`, retained the pyenv selector through `.gitignore`, and updated README.md, AGENTS.md, this plan, and the dashboard plan. Verified Poetry 2.3.2 selects the exact requested environment/Python 3.11.1, reports creation/in-project settings false, and passes configuration/docs checks. Used explicit `VIRTUAL_ENV`/`PATH` exports to bypass the existing activation script's stale path; created no environment and installed no packages.
+- [x] D05 — Specify persistent logging/progress for experiments, analysis, dashboard, and validation. Completion: added `docs/logging-plan.md`, required T13 infrastructure, dashboard log/status visibility, AGENTS guidance, and README console capture. Verified doc links, Bash snippets, required environment, and live/file stdout/stderr plus preserved success/failure/exception exit codes. Evidence: `logs/validation.D05.mqGC4o/console.log`; an earlier documentation-check attempt is retained in `logs/validation.D05.s6N6EA/console.log`. Structured runtime logging remains pending under T13.
+- [x] D06 — Keep version control focused on reproducible source/configuration. Completion: replaced `.gitignore` with focused artifact rules, retained Poetry/environment files and text fixtures, removed 13 generated figure PDFs from the index while verifying unchanged local hashes, and cleared 16 notebook outputs with code/markdown preserved. The full-output notebook is archived under ignored `artifacts/legacy-notebooks/`. Updated README/AGENTS/policy notes. Validated 42 excluded and 26 included paths, all 8 current files >=500,000 bytes, notebook preservation, unique TODO IDs and staged/unstaged whitespace. Evidence: `logs/validation.D06.GfE95b/console.log`.
+- [x] D07 — Align the plan and agent guidance with the user's fresh-experiment scope and the paper's RQ1/RQ2. Completion: read `paper/main.tex` introduction/research questions and discussion; updated `AGENTS.md`, this plan, README scope summary and `docs/scientific-definitions.md`. Retired T01c without claiming historical agreement; T01e now requires fresh execution independent of old results, and the next implementation work is T02b/T13. Preserved existing completion evidence, source/artifacts, staged removals and dependency files. Local links, fences, whitespace, unique/stable TODO IDs and fresh-run acceptance/handoff consistency passed in `logs/scope-update/validation.log`. Documentation-only change; no model run, experiment, dependency change or further historical-matching work.
+- [x] T01 — Establish a fresh, deterministic serial correctness reference and explicit corrected scientific versions. Completed under the user's revised fresh-run scope: T01a/T01b/T01d controls plus T01e below. Historical matching T01c remains explicitly retired, not completed or required. Seven new scientific/execution checks passed in `logs/fresh-implementation/unit-tests-retry.log`; a fresh two-example/six-intervention H100 run succeeded in `logs/fresh-induction-smoke/20261016T120810-e8e3c77834/` without old result inputs.
+  - [x] T01a — Implement explicit legacy/corrected graph versions and deterministic contracts. Completion: `src/nnets_transformer/analysis/graphs.py` supports `legacy-notebook-v1`, `legacy-renderer-v1`, and `influence-v2`; v2 uses complete selected inventories, separate positive distances, architecture ordering, and non-overlapping resolutions. Six CPU graph checks passed in `logs/implementation-start/t01-tests-locked.log`.
+  - [x] T01b — Add a bounded serial historical reference and tiny-model controls. Completion: `execution/reference.py`, `scripts/reproduce_historical.py`, and `tests/test_reference.py`; three tiny CPU-model checks validate exact legacy equivalence for whole/head zero ablation, identity, invalid scope and hook cleanup after errors. All nine T01 checks passed in `logs/implementation-start/t01-tests-locked.log`.
+  - [ ] T01c — **RETIRED / superseded by user scope clarification, 16 October 2026.** Former task: reconcile historical matrix/behavior differences. No further matching effort is requested; this unchecked entry preserves the task's history and is excluded from the active backlog. Existing diagnostics at `runs/t01-step1000-reference/` and `logs/implementation-start/t01-step1000-reference.log` remain archived; their failed comparison is not an implementation blocker. This work is not claimed complete.
+  - [x] T01d — Check the current clean conversion against an independently loaded immutable source model. Completion: `scripts/check_clean_adapter.py`; matching 173-token clean logits with unembedding centering disabled and preprocessing on/off have max errors 1.80006e-5 / 1.43051e-5, below the declared 2e-4 tolerance, and identical loss (5.266365). This supports current conversion correctness, not historical reproduction. Output: `runs/t01-clean-adapter-validation.json`; validation: `logs/clean-adapter-check/20261016T114940-38bf9cb397/`, capture `logs/implementation-start/t01-clean-adapter-script-retry.log`. An initial supplied-GPU-model attempt failed due to TransformerLens mixed-device weight processing; its log is preserved at `logs/clean-adapter-check/20261016T114911-a12a9ccadf/`. The final check independently loads source/converted weights.
+  - [x] T01e — Fresh serial reference independent of historical outputs. Completion: `execution/runner.py`, `execution/artifacts.py`, `models/`, `tasks/induction.py`, `metrics/`, `interventions/`, typed `records.py` and fresh YAML presets. Persist immutable model/tokenizer revisions, seeded token/sample/candidate/position manifests, component inventory, code/config identities, per-example behavioral and activation records, atomic checksummed shards and verified resume. Seven CPU checks include forbidden old-file access, identity/head-zero controls, masks/zero norms, scoring sums, interruption/resume equivalence, checksum/config rejection. Evidence: `logs/fresh-implementation/unit-tests-retry.log`; retained fixtures under `artifacts/fresh-validation/`. Fresh H100 output `runs/fresh-induction-smoke/`: 6/6 committed shards, two examples, three independent whole/head interventions, 12 serial forwards; status completed/exit 0. Log: `logs/fresh-induction-smoke/20261016T120810-e8e3c77834/`. Initial fixture/API failures remain in earlier attempt logs. Current reference is FP32/exact-zero/random-token induction only; historical tool is optional.
+- [x] T02 — Package/configuration and entry-point migration complete. Root scripts are thin configured/logged compatibility wrappers; preserved legacy source lives under `legacy/` and the old figure reader under `analysis/legacy_figures.py`. `analysis/export.py` writes normalized Parquet tables and reproducible standalone figures from verified fresh artifacts; shared `analysis/longitudinal.py` owns role definitions. Notebook replacement/compatibility is explicit in `docs/migration.md`; source notebook/archive remain unchanged. 31 regression checks passed in `logs/expansion-completion/migration-tests.log`, including export/tie/CPU/provenance checks. New dataset/model/execution capabilities remain separate TODOs.
+  - [x] T02a — Establish an installable source package, typed composed YAMLs, logged bounded-reference CLI and CPU artifact-analysis CLI. Completion: `pyproject.toml`, `poetry.lock`, `configs/`, package CLI/config/historical modules, and compatibility `scripts/reproduce_historical.py`. Hydra/OmegaConf and ANTLR are the only added locked packages; every existing version/resolved revision stayed unchanged (`logs/implementation-start/t02-dependencies.log`). TransformerLens now pins the baseline SHA. All 18 checks passed in `logs/implementation-start/implementation-tests.log`, including composition without cwd changes, early incompatible-option rejection, CPU analysis that forbids model imports, and preservation of existing outputs. CLI smoke logs: `logs/implementation-start/t02-inspect.log`, `t02-analysis.log`; graph output: `analysis_results/step1000-v2/`. The current reference config intentionally supports only the historical Pythia-14M/FP32/zero condition.
+  - [x] T02b — Finished root wrappers, shared CPU normalized export/figure pipeline and documented notebook replacement. Files: root entry points, package `legacy/`, frozen passage fixture, `analysis/{export,figures,longitudinal}.py`, typed export configuration/preset, `docs/migration.md`, tests. Validation: `logs/expansion-completion/export-tests.log`, `migration-tests.log`; fixtures/reports in ignored `artifacts/export-validation/`. Existing helper imports and old CLI arguments remain usable; fresh calculations use the one versioned graph builder.
+  - [x] T02c — Extract fresh model/task/replacement/metric/execution boundaries with typed records and registries. Completion: the modules and YAMLs listed in T01e; adapters own hook axes/inventory/query-versus-KV counts, tasks own seeded preparation/answer positions, replacements own values, metrics own FP32 scores and masked propagation reductions, runner owns lifecycle/shards. Existing CLI now supports `command=run`/`+experiment=induction[_smoke]`, while optional historical/CPU analysis commands remain usable. Validated with seven CPU checks and the H100 run/logs in T01e. Broader migration remains T02b.
+  - [x] T02d — Consume fresh measurement exports in shared CPU graph analysis with verified provenance and coverage. Completion: `analysis/artifacts.py`, graph/CLI integration and the fresh CPU-analysis fixture verify source/output checksums, completed-run status, full adapter inventory, dataset/scoring identity and mean-similarity aggregation. Graph metadata now reports measured/admissible pairs and partial/complete coverage, so smoke intervention subsets are not labeled fully measured. Eight fresh checks passed in `logs/fresh-implementation/analysis-tests.log`; structured attempt `logs/fresh-analysis-validation/20261016T121056-5b87156d13/`. The CPU test forbids all model-library imports and rejects a corrupted source export. Figures/Parquet and broader migration remain T02b.
+- [x] T03 — Optimized bounded clean-cache reuse, selective caching, FP32 vectorized scoring/activation reductions and independent intervention slices implemented in `execution/batching.py`, adapter and metrics. Serial reference retained. 33 checks pass, including uneven padding, independent slices and error cleanup: `logs/expansion-completion/t03-tests.log`. H100 NVL four-example/eight-source profile: 64→9 forwards, 1.390→0.210 seconds (6.61×), FP32 max score error 3.82e-6/cosine error 1.94e-7 and no threshold flips. BF16 0.231 seconds, score error .0428/cosine .00461 with two .7-threshold flips; therefore FP32 remains default and BF16 is an explicitly recorded opt-in sensitivity condition. Profile: `logs/t03-profile/20261016T125010-886b49c315/profile.json`; failed initial API attempt retained in `logs/expansion-completion/t03-profile.log`.
+- [x] T04 — Add calibrated means, persisted donors, both patch directions, and the `tigges_2024` core tasks (IOI, gendered pronouns, greater-than, SVA), retaining induction. Follow [the task/scoring specification](tigges-2024-task-protocols.md), including paper-sized sample manifests and tokenizer-aware candidate groups. Verify replacement tensors, no-op identity, alignment, split separation, padding exclusion, metric sums/signs, corrupt-label anchoring, prediction positions, unstable recovery handling, and resume equivalence. Completion: `tasks/{paper,sources}.py` prepare all four tasks from the checksummed official supplement at paper sizes 70/70/200/200 (smaller sizes labeled `development`), retokenized per tokenizer with clean labels anchored for corrupt/patched scoring. IOI uses the source mixed-template generator/`ABB->ABA, BAB->BAA` flip through a no-special-token proxy (TransformerLens prepends BOS by default); pronoun labels are mapped to strings; greater-than uses standalone two-digit suffix tokens after the century token and records per-example canonical-continuation counts; SVA uses disjoint exact word-boundary verb groups (Pythia: 829 singular/1,416 plural) with both number directions and one direction per source pair. Calibration prompts are disjoint from every evaluation clean/corrupt prompt, prioritise covering the longest evaluation length and record per-position coverage (paper YAMLs: 64 calibration examples; pronouns 12, the most the 100-row CSV allows after a 70-row evaluation set). `interventions/references.py` adds position-aligned (default) and global calibration means, matched donors in noising and denoising directions, seeded non-self equal-length resampled donors (batched), and replacement conventions in dataset manifests; config rejects denoising without matched donors and matched donors for unpaired tasks. Presets: `+experiment=paper` / `paper_smoke`. Validation: nine new CPU checks in `tests/test_paper_tasks.py` (real Pythia tokenizer, TransformerLens tokenizer processing) cover determinism, prediction positions, split disjointness, IOI/pronoun/year/SVA candidates and the equality boundary, full-vocabulary group sums, corrupt-label anchoring, exact identity, matched head/component tensors in both directions, exact means and coverage/overlap rejection, donor seeding/non-self, undefined small-gap recovery, serial/optimized agreement for all replacement conditions with right padding, and interrupted-resume equivalence for mean and denoising donors; 42/42 suite checks pass in `logs/t04-tests/20261016T132106-4a857dc2c4/` (capture `logs/t04-validation/unit-tests.log`). Real Pythia-14M step1000 H100 smoke: 4 tasks × zero/mean/donor-noising/donor-denoising, 4 examples × 3 interventions each, all completed (`runs/t04-validation/`, captures `logs/t04-validation/*.log`); the exact embedding controls give recovery 0.000 (matched noising) and 1.000 (matched denoising) on every task. Real resume: `logs/t04-ioi-mean-resume/20261016T132051-13bafaf7da/`, 0 forwards/12 reused shards, byte-identical outputs. A resume of an earlier SVA run was correctly rejected after a source change (`logs/t04-validation/sva-mean-resume.rejected-code-change.log`); the initial IOI BOS failure logs are retained as `logs/t04-validation/ioi-*.failed-bos.log`.
+- [ ] T05 — Pilot Pythia 14M/160M/1B at 8–12 checkpoints with induction plus the four paper tasks and zero/mean/matched-donor methods. Use paper preset sizes of 70/70/200/200 for IOI/pronouns/greater-than/SVA; explicitly label any smaller 64–128-example development subset. Start at module outputs, then head outputs in informative intervals. Freeze pilot choices before held-out evaluation. Expand scales, checkpoints, donors and training seeds selectively.
+  - [x] T05a — Sweep and scale infrastructure. Completion: Pythia-family validation/adapters (`config.PYTHIA`; model YAMLs 14M–2.8B and 160M-seed1) with load-time layer/parallel-block checks and provenance for tokens seen (`step × 2,097,152`), training seed and deduplication; torch-free `models/checkpoints.py` resolves checkpoint branches to immutable commits (also `model.revision=resolve` for single runs, recorded before saving YAML) and optionally evicts downloaded snapshots. `execution/sweep.py` (`command=sweep`, typed `Sweep` schema, presets `+experiment=pilot` and `sweep_smoke`) loads each checkpoint once for every task × replacement cell, writes ordinary per-cell runs under `<output_root>/<model>/<checkpoint>/<task>/<replacement>`, records explicit incompatible-cell skips, verifies fixed evaluation/calibration/donor content across checkpoints, keeps first-resolved commits on resume and maintains an atomic per-model `<output_root>/<model>/sweep.json` (moved from the root after a shared-root collision was found; earlier smoke output `runs/sweep-smoke/sweep.json` keeps the old location). Measurement storage moved to versioned chunked shards `fresh-reference-v2` (deterministic zip of JSON behavior plus float32 `[record, observation, field]` activations, one commit per example chunk, batches aligned to chunks for bit-identical resume); readers/exports accept v1 and v2. New replacement YAMLs: `donor_denoising`, `donor_resample`, `mean_global`; induction task YAML is 128 evaluation/64 calibration examples (development probe), the induction experiment preset keeps four. Validation: 45/45 suite checks including three sweep checks (one load per checkpoint, skips, refusal without resume, zero loads on resume, early incompatible rejection, pilot composition). Real H100 sweep smoke `runs/sweep-smoke/` (Pythia-14M step512/step1000 resolved to `64c08ee…`/`5b02099…`, induction+IOI × zero/donor, induction/donor skipped): 2 checkpoint loads, 6/6 cells; resume: 0 loads/0 cells (`logs/t05-sweep-smoke/`, captures `logs/t05-validation/sweep-smoke*.log`). CPU Parquet export of the two-checkpoint IOI/zero trajectory: `exports/sweep-smoke-ioi-zero/` (`logs/t05-validation/sweep-export.log`). Timing for a paper-sized SVA/zero cell, all whole components, step143000, H100 NVL: Pythia-14M 8,600 interventions/400 forwards in 14.5 s (16 MB); Pythia-1B 22,600/850 in 72.1 s plus 210.8 s first download/load, 9.4 GB peak host RSS (27 MB); `runs/t05-timing/`, `logs/t05-timing-*`, `logs/t05-validation/timing-*.log`.
+  - [ ] T05b — Run the pilot sweeps (14M, 160M, 1B) with `+experiment=pilot`, then export/analyze them. Not started; launch commands are in the README and handoff.
+  - [ ] T05c — Choose informative intervals for head-resolution runs (`scope=head`), freeze pilot choices, then run held-out evaluation and selective seed/scale/donor expansion.
+- [ ] T06 — Replicate on OLMo 2 1B stage 1, then 7B. Validate clean logits against source models and check hook/position/intervention semantics. Add 13B if compatible and economical. Blocker recorded 16 October 2026: the pinned TransformerLens baseline (`50ee38b…`) has no OLMo/OLMo 2 support (no `olmo` entries in `OFFICIAL_MODEL_NAMES`). Proceeding requires a deliberate choice between a TransformerLens upgrade (with renewed clean-logit/intervention validation of the Pythia adapter) and a separate Hugging Face-hook adapter; no dependency was changed.
+- [ ] T07 — Optional: implement the observation-only Appendix D head diagnostics, validating attention indexing, copy-score normalization/weight processing, and succession candidate/tie conventions against reference calculations. Keep CSPA and path-based intervention procedures outside this setting.
+- [ ] T08 — Optional: specify and implement Appendix E behavioral evaluations (SciQ, PIQA, WinoGrande, ARC Easy) after recovering original evaluation settings or explicitly choosing a labeled adaptation; validate per-choice scoring and accuracy.
+
+- [x] T09 — Dashboard MVP: implement optional CPU-only dependencies, legacy/new artifact catalog and queries, and linked graph/behavior trajectories with checkpoint selection. Follow [the dashboard plan](dashboard-plan.md); verify values against source tables, coverage/step-zero handling, and absence of model/GPU execution. Completion: optional Poetry groups `dashboard` (Dash 3.4.0, dash-cytoscape 1.0.2) and `dashboard-test` (Selenium 4.32.0) installed in the required environment; lock diff 0 changed/0 removed/19 added and pip-freeze diff additions only (`logs/t09-dependencies/`; backups under `artifacts/environment/`). An initial Selenium resolution that upgraded certifi/urllib3 was reverted from the backup lock and the environment restored before the final install (`logs/t09-dependencies/install.log`). `dashboard/repository.py` discovers completed `normalized-experiment-v1` exports, verifies file checksums, caches per manifest hash (bounded LRU) and serves trajectory/threshold/metric/step queries; `dashboard/legacy.py` (`python -m nnets_transformer.dashboard import-legacy`) converts the trusted legacy pickles without modifying them, labeling legacy graph/closeness/behavior semantics and unavailable edges/tokens/active nodes (`exports/legacy-induction/`, `logs/dashboard-legacy-import/`). Overview: linked node/active-node, edge, density/admissible-density and behavior panels; click/previous/next/slider select recorded checkpoints; step 0 drawn as a labeled initialization marker on log axes; tokens axis only when recorded. Tests (`tests/test_dashboard.py`) use pipeline-generated fixtures (`artifacts/dashboard-fixture/`) with step 0, a missing checkpoint and two thresholds and check plotted values against source Parquet rows, per-example (not per-intervention/threshold) behavior baselines, and an import guard proving browsing never imports torch/Transformers/TransformerLens, model adapters, the runner or the sweep.
+- [x] T10 — Dashboard analysis views: add component ranking/trajectories, distributions, role dynamics and compatible-run comparisons. Validate shared filters, graph/scoring definitions, uncertainty availability, identity alignment, and aggregation. Completion: Components (sortable ranking with tied minimum ranks, click-to-pin, raw/rank trajectories, metric-by-step heatmap), Distributions (shared-bin histograms/ECDF and quantile tables over selected checkpoints), Role dynamics (saved roles or shared `role_dynamics` at a chosen quantile, strict-above tie policy, entering/leaving/retained sets, checkpoint Jaccard matrix) and Compare (overlays only trajectories with matching graph version/resolution and threshold, explicit exclusions, behavior per task in separate unit-labeled panels, note that component identities are linked only within a run). All views use the same selection inputs; uncertainty is not displayed because no uncertainty estimates are saved. Validated against shared `upper_tail`/`role_dynamics` and source rows in the dashboard tests.
+- [x] T11 — Dashboard network explorer: load identified endpoints, provide stable layouts, neighborhood/strength display filters and checkpoint differences. Validate truncation labels and that displayed subgraphs do not alter full-graph metrics. Completion: Cytoscape network for endpoint-identified exports with a deterministic layer/site/head layout from the complete inventory (identical across checkpoints), metric-sized nodes including isolates, minimum-strength/top-edge/neighborhood display filters with deterministic tie-breaks, displayed/total counts and an explicit truncation label, node details from saved full-graph metrics, and a directed checkpoint difference view. Tests confirm display filters leave full-graph metric tables unchanged, strongest-edge selection and neighborhood counts. Legacy exports report the network as unavailable.
+- [x] T12 — Dashboard completion: implement chart/table/state exports, saved-view restoration, bounded cache invalidation and completed-artifact refresh. Add browser interaction checks, measure documented latency/memory targets, and document actual CPU setup/launch commands. Completion: exports of view state JSON, standalone overview chart HTML and ranking CSV/checkpoint Parquet, all with embedded provenance (export/manifest hash, sources, graph/role definitions, trajectory, view); validated saved-view upload and URL state (unknown fields rejected, unavailable selections reconciled with explanations); Refresh rescans artifacts and invalidates cache entries by manifest hash; status/log tab reads bounded attempt tails, separates heartbeat from progress and flags possibly stale runs. Logged server `python -m nnets_transformer.dashboard serve` (localhost by default; remote binding refused without `allow_remote`), configured by `configs/dashboard.yaml`; SIGTERM is now recorded as interrupted/143 (`logs/t12-validation/serve-sigterm.log`, attempt `logs/dashboard/20261016T134731-266961878c/`). Headless Chrome test covers checkpoint navigation/click, component pinning, run comparison, network counts and URL restoration of the initialization checkpoint. Measured on this host: fixture overview 1.77 s, network 0.12 s (`artifacts/dashboard-fixture/browser-measurements.json`); real server on the legacy export (153 checkpoints × 188 components × 6 thresholds): overview 2.56 s (target 3 s met), warm checkpoint update 0.58–0.67 s browser round trip (500 ms target not met; slowest single server callback ~0.25 s), tab switches ~0.21 s, server RSS 726 MB (`logs/t12-validation/legacy-browser-measurements.json`, attempt `logs/dashboard/20261016T134646-e18454eb27/`). 54/54 suite checks pass in `logs/t09-t12-tests/20261016T134756-d491d4de70/` (capture `logs/t12-validation/unit-tests.log`).
+
+- [x] T13 — Required logging/progress infrastructure: implement [persistent logs and live status](logging-plan.md) across experiments, analysis, dashboard, and validation commands. Integrate base logging with T02 before long sweeps. Verify timestamped context, stdout/stderr capture, exceptions/nonzero exit codes, progress/heartbeat distinction, atomic status, artifact/resume records, interruption, independent concurrent attempts, and live inspection; persist validation log paths. Completion: T13a/T13b/T13c/T13d complete; every current experiment, analysis/export, sweep, dashboard and validation entry point writes `logs/<job>/<attempt>/` with console/events/status, and the dashboard exposes run status and logs.
+  - [x] T13a — Shared attempt logger and subprocess capture foundation. Completion: `src/nnets_transformer/observability.py` and six CPU fixture checks cover timestamped readable/JSON records, atomic live status, Python warnings, stdout/stderr, full exceptions, nonzero exits, quiet heartbeat separated from progress, SIGTERM propagation, preserved resume attempts, concurrent jobs, handler restoration, redaction, and invalid log-root failure before work. Validation: `logs/implementation-start/t13-base-tests.log`; retained fixture attempts: `artifacts/validation-t13/239d8dcbe5da4284af7a38adacc86c46/logs/`. This is a foundation, not completed T13 integration.
+  - [x] T13c — Configure fresh CLI logging from typed YAML and validate additional failure/liveness behavior. Completion: `config.py`, `cli.py`, `observability.py`, `configs/config.yaml`, runner progress and `tests/test_observability.py`. YAML controls console/file levels, timezone, heartbeat and progress intervals; invocation records resolved config/hash/output root. Resume counters separate skipped examples/interventions from current work. Runtime heartbeat reconfiguration, SIGINT exit 130, SIGTERM exit 143, invalid/unwritable log roots before subprocess work, plus prior failure/concurrency controls passed in the 28-test suite at `logs/fresh-final-validation/20261016T121209-f7fa10133e/` (`logs/fresh-implementation/final-tests.log`). T13b still covers remaining entry points, overhead/rotation/telemetry and later dashboard integration.
+  - [x] T13d — Base logging integration, retention/rotation, lightweight telemetry and measured overhead complete. Existing/new experiment, analysis/export and root compatibility entry points use shared Job logging before heavy setup; new future entry points must do likewise. Typed YAML adds root, retained segment rotation and CPU/loaded-CUDA allocator telemetry intervals; status records host/PID/start identity, counter rate/ETA without fabricated progress. Rotation/relocation/concurrent/failure/signal tests pass within 31-test regression. Evidence: `logs/expansion-completion/logging-tests.log`, `migration-tests.log`; 200 atomic events measured 0.2200 ms/event on this CPU/filesystem (`logs/logging-profile/20261016T124303-c44ebe484c/profile.json`, capture `logs/expansion-completion/logging-profile.log`). Parent T13 remains pending only future entry-point integration and dashboard monitoring acceptance.
+  - [x] T13b — Wire logging/configuration through all entry points; measure overhead, add configurable telemetry/rotation/progress intervals, verify SIGINT and unwritable roots, and integrate dashboard status panel at T09/T12. Completion: new entry points (sweep via the configured CLI with a sweep-level resume command; dashboard serve/import-legacy) use shared Job logging before heavy setup; the dashboard status panel reads `status.json`/bounded console tails on CPU. SIGINT/unwritable-root/overhead/rotation checks remain those in T13c/T13d; the dashboard adds a validated SIGTERM→143 record. Evidence as in T09–T12.
+
+First research question: do temporal structure and component-role turnover survive changes of examples, activation replacement, model scale and training seed? OLMo then tests replication across families.
+
+**Session handoff notes**
+
+- Incident record (16 October 2026, 13:50): while checking README commands, `+experiment=pilot` without `command=inspect` launched a real Pythia-1B pilot sweep. It was stopped with SIGTERM after one completed cell (step0/induction/zero) and one interrupted cell; the attempt is recorded as interrupted/143 (`logs/readme-inspect/20261016T135010-1dc6a64db3/`). Its partial output was moved, not deleted, to `runs/archive/accidental-pilot-1b-20261016T1350/`; `runs/pilot/` is clean for the real pilot. README now shows `command=inspect`; `revision: resolve` is accepted for inspect.
+- Dashboard handoff (16 October 2026): T09–T12 and T13 complete; launch with `poetry install --with dashboard` once, then `poetry run python -m nnets_transformer.dashboard serve` (SSH tunnel to port 8050). Remaining: T05b/T05c experiment runs (user-launched), T06 (blocked on an OLMo adapter/dependency decision), optional T07/T08.
+- T05a handoff (16 October 2026): sweep/scale infrastructure complete. Experiments ready to launch (T05b), after the required exports: `CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id pilot-14m +experiment=pilot model=pythia_14m sweep.output_root=runs/pilot`; repeat with `model=pythia_160m`/`pythia_1b` (`sweep.evict_checkpoint_cache=true` bounds downloads). Resume any sweep by repeating its command with `execution.resume=true` (the attempt's `status.json` records the exact command).
+- T04 completion handoff (16 October 2026, continuation session): paper tasks, calibrated means, donors and both directions are complete and validated (see T04 note). Next: T05 infrastructure (Pythia family adapters/revision resolution, a checkpoint-grouped sweep command that loads each checkpoint once for all tasks/methods), then T07/T09–T12. No research sweep has run. Exact suite command after required exports: `poetry run -- python -u -m nnets_transformer.observability --job-id validation -- python -u -m unittest discover -s tests -v`.
+- T03 completion handoff: optimized execution and precision profile complete; next implement T04 paper tasks and calibrated/donor replacements. No full sweep has run.
+- Active completion task: user requested all remaining plan implementation plus running instructions. T02/T02b and T13d have now completed; 31 checks pass (`logs/expansion-completion/migration-tests.log`). Work continues autonomously with T03 optimized execution, then T04 tasks/replacements, model/sweep support, and dashboard/optional diagnostics. T05/T06 full research sweeps remain separate from bounded implementation checks; do not fabricate experiment completion.
+- Latest additions: Parquet normalized tables/manifest and standalone report; shared role quantile/tie/churn functions; logged root compatibility wrappers and preserved legacy modules/passage fixture; retained log rotation, YAML log roots/telemetry and CPU overhead measurement. See TODO completion evidence above. Earlier scientific runs stay archived; code identity changes intentionally invalidate their inference resume, while CPU export reads their saved measurements.
+- Next TODO: T04; T03 completed with measured 6.61× FP32 speedup on the bounded H100 fixture. Exact current baseline test command after required exports: `poetry run -- python -u -m nnets_transformer.observability --job-id validation -- python -u -m unittest discover -s tests -v`.
+
+
+- Previous-session record (superseded by the active handoff above): the fresh pipeline is implemented and usable. Completed T01 under the revised scope, T01e, T02c (modular boundaries), T02d (fresh CPU artifact analysis) and T13c (YAML logging/additional failure checks). Prior D01–D07, T01a/T01b/T01d, T02a and T13a remain complete. T01c remains retired; no old-result matching was performed. Parent T02/T13 and T03–T12 remain incomplete.
+- Previous next TODO (superseded): **T02b** — finish remaining entry-point/notebook migration or explicit replacements, normalized/Parquet and figure exports from fresh saved measurements. Continue **T13b** coverage for remaining entry points, overhead measurements, rotation/telemetry and later dashboard integration. Then **T03** baseline reuse/vectorization/batching/precision benchmarking against the new serial reference and **T04** calibrated mean/donors and paper task datasets. Do not block on or investigate historical mismatches.
+- Implemented files: typed `records.py`; `models/{base,transformer_lens}.py`; `tasks/{base,induction}.py`; `interventions/replacements.py`; `metrics/{behavioral,activation}.py`; `execution/{runner,artifacts}.py`; fresh artifact reader and graph coverage metadata under `analysis/`; config/CLI/logger integration; composed induction/component/head/experiment YAMLs and fresh defaults. `tests/test_fresh_runner.py` plus expanded logging/config tests validate the new contracts. README, AGENTS and scientific definitions now describe current commands/limits.
+- Final fresh H100 run: `runs/fresh-induction-final/`, `resolved.yaml`, `dataset.json`, `inventory.json`, `manifest.json`, `shards/*.json`, `similarities.csv`, `behavior.json`. Two seeded induction examples, three independent embedding/query-head/post-MLP interventions, **6/6 shards**, **12 FP32 serial forwards**, completed/exit 0. Attempt: `logs/fresh-induction-final/20261016T121228-4124bae401/`; capture `logs/fresh-implementation/h100-final.log`. This is a development smoke case, not a research sweep or full graph measurement. The earlier fresh smoke/failed fixture/API attempts are retained under `runs/fresh-induction-smoke/` and `logs/fresh-implementation/`.
+- Resume validation: `logs/fresh-induction-final-resume/20261016T121412-51e2d2a94f/` (capture `logs/fresh-implementation/h100-final-resume.log`). Saved YAML and source/config/model/dataset identities plus all input/shard checksums validated; **0 completed/6 skipped interventions**, **0 completed/2 skipped examples**, **0 forwards**. Both attempts are linked in the manifest/status. Exact resume after required environment exports: `CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id induction-resume --config-dir runs/fresh-induction-final --config-name resolved execution.resume=true`. Scientific source/config changes deliberately invalidate resume; choose new output locations when changing conditions.
+- CPU analysis: `analysis_results/fresh-induction-final/{graph.json,metrics.json,manifest.json,resolved.yaml}`. Attempt `logs/fresh-artifact-analysis/20261016T121535-f7229f8a80/`; capture `logs/fresh-implementation/final-analysis.log`. Fresh identity/scoring/inventory provenance is verified; the smoke subset is explicitly partial (measured admissible-pair coverage about 0.0940). Re-analyze to a new output with `poetry run nnets-transformer --job-id induction-analysis +experiment=analysis input_matrix=runs/fresh-induction-final/similarities.csv output_directory=analysis_results/induction-analysis-new`. CPU tests forbid torch/Transformers/TransformerLens imports while browsing artifacts and reject changed scientific exports.
+- Validation: **28 tests passed** at `logs/fresh-final-validation/20261016T121209-f7fa10133e/` (capture `logs/fresh-implementation/final-tests.log`), including deterministic samples/positions, full-vocabulary group sums, identity/all-position head zero, masks/zero norms, hook cleanup after errors, forbidden old-file access, interrupted-prefix/full resume equivalence, corrupt/incompatible resume rejection, CPU analysis provenance/coverage, runtime logging reconfiguration, SIGINT/SIGTERM, unwritable log roots, honest progress and independent attempts. After changing composed defaults to fresh induction, three configuration/CLI regression checks passed at `logs/fresh-config-regression/20261016T121642-b2a20b228a/` (`logs/fresh-implementation/config-regression.log`). Initial seven/eight-check intermediate attempts are retained.
+- Artifact/preservation checks: `logs/fresh-artifact-check/20261016T121807-1f050d393b/` (`logs/fresh-implementation/artifact-check.log`) verify fresh input/shard/output hashes, linked skipped-work counters, CPU provenance/coverage, fresh YAML defaults, unchanged 13 staged PDF removals and local PDF bytes, cleared notebook/source/archive correspondence, documentation links/fences, Python compilation and staged/unstaged whitespace. Fixture artifacts/logs remain under ignored `artifacts/fresh-validation/` and prior validation directories. No commit, lockfile/dependency change, source-notebook modification or full sweep occurred this implementation session.
+- Required environment remains `/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer`; exact prefix and Poetry creation=false rechecked in `logs/fresh-implementation/environment.log`. Set all required exports in every shell. Existing installed extra TorchVision is incompatible with locked PyTorch: use explicit `resources.disable_optional_vision=true` for text-only fresh model loading; manifests record it. No replacement environment was created. Earlier setup provenance/lock restoration remains recorded in completed TODO evidence and `logs/implementation-start/`; original lock archive is `artifacts/environment/poetry.baseline.lock`.
+- Run a new complete-component development reference after exports with `CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id induction +experiment=induction resources=h100 resources.disable_optional_vision=true output_directory=runs/induction-development-new`. Four examples and all supported component interventions is still a development condition. Smoke preset: `+experiment=induction_smoke`; individual-head reference: `scope=head`. Run checks with `poetry run -- python -m nnets_transformer.observability --job-id validation -- python -u -m unittest discover -s tests -v`.
+- Limits/decisions: fresh exact-zero/random-token induction/FP32 only. Per-intervention clean forwards are intentionally repeated for the serial oracle; no optimized/BF16 speedup is claimed. Shards are JSON and small CSV/JSON exports; large-run Parquet/retention, means/donor alignment/pairing, task datasets, full figure regeneration and dashboard are unfinished. Keep the paper's RQ1/RQ2, all-position component/head intervention scope, task-owned scoring and independent CPU analysis. Cache reuse is for immutable weights/tokenizers, not historical scientific results. All old artifacts and optional historical tools remain preserved.

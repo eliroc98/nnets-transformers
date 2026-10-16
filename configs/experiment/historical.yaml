@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - override /task: legacy_induction
+  - override /scope: historical
+command: reference
+output_directory: runs/historical-reference

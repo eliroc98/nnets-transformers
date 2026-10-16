@@ -1,0 +1,10 @@
+name: donor
+estimator: exact
+# noising: corrupt donor -> clean recipient (damage);
+# denoising: clean donor -> corrupt recipient (recovery; matched only).
+direction: noising
+# matched: the task's paired counterfactual; resample: another evaluation example
+# of equal length (never itself), drawn with donor_seed.
+donor_policy: matched
+donor_seed: 43
+recovery_epsilon: 1.0e-6

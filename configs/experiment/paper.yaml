@@ -1,0 +1,11 @@
+# @package _global_
+# Tigges et al. (2024) paper task preset; choose the task with task=<ioi|gendered_pronoun|greater_than|sva>.
+# Paper-sized defaults: 70/70/200/200 evaluation examples; smaller task.examples is labeled "development".
+defaults:
+  - override /task: ioi
+  - override /scope: component
+  - override /replacement: donor
+command: run
+output_directory: runs/paper-development
+execution:
+  backend: optimized

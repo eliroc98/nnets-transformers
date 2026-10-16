@@ -1,0 +1,6 @@
+name: ioi
+scoring_version: tigges-2024-ioi-v1
+examples: 70
+seed: 42
+calibration_examples: 64
+source_directory: artifacts/tigges-2024-source

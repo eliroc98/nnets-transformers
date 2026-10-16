@@ -1,0 +1,4 @@
+version: influence-v2
+resolution: component
+similarity_threshold: 0.7
+epsilon: 1.0e-8

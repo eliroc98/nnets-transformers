@@ -1,0 +1,4 @@
+# Select the physical GPU with CUDA_VISIBLE_DEVICES outside this YAML.
+device: cuda
+dtype: float32
+disable_optional_vision: false

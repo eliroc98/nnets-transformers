@@ -1,0 +1,7 @@
+id: EleutherAI/pythia-160m-seed1
+checkpoint: step1000
+revision: resolve
+tokenizer_revision: resolve
+n_layers: 12
+architecture: parallel
+cache_dir: models/hf-cache

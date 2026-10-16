@@ -1,0 +1,6 @@
+# Reuse the activated nnets-transformer pyenv environment.
+# Activate it explicitly before invoking Poetry (see README.md).
+[virtualenvs]
+create = false
+in-project = false
+use-poetry-python = false

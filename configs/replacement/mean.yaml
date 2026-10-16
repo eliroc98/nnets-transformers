@@ -1,0 +1,7 @@
+name: mean
+estimator: exact
+direction: noising
+# position: per-position mean over disjoint calibration examples (default);
+# global: mean over examples and positions, a separately labeled condition.
+mean_reduction: position
+recovery_epsilon: 1.0e-6

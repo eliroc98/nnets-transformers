@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - override /task: induction
+  - override /scope: component
+command: run
+output_directory: runs/induction-development
+# Four-example development reference; the task YAML default (128) is used by sweeps.
+task:
+  examples: 4

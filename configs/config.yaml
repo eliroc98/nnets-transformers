@@ -1,0 +1,42 @@
+defaults:
+  - model: pythia_14m
+  - task: induction
+  - replacement: zero
+  - scope: component
+  - graph: corrected
+  - resources: cpu
+  - _self_
+command: inspect
+input_matrix: runs/induction-development/similarities.csv
+output_directory: runs/development
+
+execution:
+  resume: false
+  backend: serial
+  example_batch_size: 4
+  intervention_batch_size: 4
+  examples_per_shard: 4
+sweep:
+  checkpoints: []
+  tasks: []
+  replacements: []
+  output_root: runs/sweep
+  examples: null
+  calibration_examples: null
+  skip_incompatible: true
+  evict_checkpoint_cache: false
+logging:
+  root: logs
+  rotation_bytes: 10485760
+  telemetry_interval_seconds: 60
+  retain_all_attempts: true
+  console_level: INFO
+  file_level: INFO
+  heartbeat_interval_seconds: 10
+  progress_interval_seconds: 10
+  timezone: Europe/Rome
+
+export:
+  inputs: []
+  thresholds: [0.1, 0.3, 0.5, 0.7]
+  quantile: 0.95

@@ -1,0 +1,11 @@
+# CPU-only dashboard: reads completed normalized exports; never loads models.
+artifact_roots: [exports]
+log_root: logs
+host: 127.0.0.1          # use an SSH tunnel for remote access
+port: 8050
+allow_remote: false
+cache_entries: 32        # bounded table/role cache, keyed by manifest hash
+network_max_edges: 300   # display limit only; full-graph metrics are unchanged
+status_attempts: 100
+status_refresh_seconds: 15
+log_tail_bytes: 20000

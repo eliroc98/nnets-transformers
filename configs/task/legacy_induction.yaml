@@ -1,0 +1,3 @@
+name: legacy_induction
+scoring_version: legacy-induction-token2205-v1
+historical_root: .

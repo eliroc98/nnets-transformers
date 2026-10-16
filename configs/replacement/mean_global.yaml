@@ -1,0 +1,6 @@
+# Separately labeled condition: mean over calibration examples and positions.
+name: mean
+estimator: exact
+direction: noising
+mean_reduction: global
+recovery_epsilon: 1.0e-6

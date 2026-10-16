@@ -1,0 +1,187 @@
+"""Atomic chunked measurement shards and verified, exclusive resumption.
+
+Schema v2 commits one deterministic zip per example chunk: behavioral records as
+JSON plus one float32 activation array [records, observations, 4]. Readers also
+accept per-intervention v1 JSON shards from earlier runs.
+"""
+import fcntl
+import hashlib
+import io
+import json
+import math
+import os
+from pathlib import Path
+import zipfile
+
+import numpy as np
+from nnets_transformer.observability import atomic_json
+
+SCHEMA = "fresh-reference-v2"
+READABLE = {"fresh-reference-v1", SCHEMA}
+FIELDS = ("cosine_similarity", "relative_l2_change", "clean_zero_norm_fraction", "patched_zero_norm_fraction")
+_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def write_chunk(path, records, observation_ids):
+    """Deterministic bytes: fixed zip timestamps and member order."""
+    values = np.full((len(records), len(observation_ids), len(FIELDS)), np.nan, dtype=np.float32)
+    meta = []
+    for row, record in enumerate(records):
+        if [a["observation_id"] for a in record["activations"]] != observation_ids:
+            raise ValueError("Activation observations differ from the saved inventory order")
+        for column, activation in enumerate(record["activations"]):
+            values[row, column] = [math.nan if activation[f] is None else activation[f] for f in FIELDS]
+        meta.append({k: v for k, v in record.items() if k != "activations"})
+    array = io.BytesIO()
+    np.save(array, values, allow_pickle=False)
+    temporary = path.with_name(path.name + ".tmp")
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name, data in (("records.json", json.dumps(meta, sort_keys=True, allow_nan=False).encode()),
+                           ("activations.npy", array.getvalue())):
+            info = zipfile.ZipInfo(name, date_time=_EPOCH)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            bundle.writestr(info, data)
+    with open(temporary, "rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def read_chunk(path):
+    with zipfile.ZipFile(path) as bundle:
+        meta = json.loads(bundle.read("records.json"))
+        values = np.load(io.BytesIO(bundle.read("activations.npy")), allow_pickle=False)
+    return meta, values
+
+
+def expand(meta, values, observation_ids):
+    """Reconstruct v1-shaped per-record dictionaries for compatibility readers."""
+    for record, rows in zip(meta, values):
+        activations = []
+        for observation, (cosine, relative, clean_zero, patched_zero) in zip(observation_ids, rows.tolist()):
+            valid = not math.isnan(relative)
+            activations.append({"observation_id": observation, "cosine_similarity": cosine,
+                "relative_l2_change": relative if valid else None,
+                "relative_l2_status": "valid" if valid else "undefined_clean_zero_norm",
+                "clean_zero_norm_fraction": clean_zero, "patched_zero_norm_fraction": patched_zero})
+        yield {**record, "activations": activations}
+
+
+def iter_records(root, manifest):
+    """Verified records of a completed v1 or v2 run, in planned order."""
+    root = Path(root)
+    if manifest.get("schema_version") not in READABLE:
+        raise ValueError("Unknown fresh artifact schema")
+    observation_ids = None
+    for key in manifest["planned_shards"]:
+        shard = manifest["shards"][key]
+        path = root / shard["path"]
+        if digest(path) != shard["sha256"]:
+            raise ValueError(f"Corrupt shard: {path}")
+        if manifest["schema_version"] == "fresh-reference-v1":
+            yield json.loads(path.read_text())
+            continue
+        if observation_ids is None:
+            observation_ids = [o["hook"] if o["head"] is None else f"{o['hook']}.{o['head']}"
+                               for o in json.loads((root / "inventory.json").read_text())["observations"]]
+        yield from expand(*read_chunk(path), observation_ids)
+
+
+class Artifacts:
+    def __init__(self, root, identity, resolved_yaml, dataset, inventory, planned, job, resume=False):
+        """planned maps chunk IDs to their ordered work keys."""
+        self.root, self.job = Path(root), job
+        self.planned = planned
+        self.observation_ids = [o["hook"] if o["head"] is None else f"{o['hook']}.{o['head']}" for o in inventory["observations"]]
+        existed = self.root.exists()
+        if existed and not resume:
+            raise FileExistsError(self.root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.lock = (self.root / ".writer.lock").open("a")
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            path = self.root / "manifest.json"
+            self.identity = fingerprint(identity)
+            plan = fingerprint(planned)
+            if existed:
+                self.manifest = json.loads(path.read_text())
+                if self.manifest["schema_version"] != SCHEMA or self.manifest["identity_sha256"] != self.identity:
+                    raise ValueError("Resume configuration/model/dataset/code identity differs")
+                for name, checksum in self.manifest["inputs"].items():
+                    if digest(self.root / name) != checksum:
+                        raise ValueError(f"Resume input failed checksum: {name}")
+                if self.manifest["planned_shards"] != list(planned) or self.manifest["plan_sha256"] != plan:
+                    raise ValueError("Resume work plan differs")
+                for key, shard in self.manifest["shards"].items():
+                    if key not in planned or shard["path"] != f"shards/{key}.zip":
+                        raise ValueError("Unexpected committed shard")
+                    if digest(self.root / shard["path"]) != shard["sha256"]:
+                        raise ValueError(f"Resume shard failed checksum: {key}")
+            else:
+                (self.root / "shards").mkdir()
+                (self.root / "resolved.yaml").write_text(resolved_yaml)
+                atomic_json(self.root / "dataset.json", dataset)
+                atomic_json(self.root / "inventory.json", inventory)
+                self.manifest = {"schema_version": SCHEMA, "identity_sha256": self.identity,
+                    "identity": identity, "planned_shards": list(planned), "plan_sha256": plan,
+                    "work_count": sum(map(len, planned.values())), "state": "running", "shards": {},
+                    "inputs": {name: digest(self.root / name) for name in ("resolved.yaml", "dataset.json", "inventory.json")},
+                    "attempts": [], "artifacts": {"dataset": "dataset.json", "inventory": "inventory.json",
+                    "resolved_config": "resolved.yaml", "similarities": "similarities.csv", "behavior": "behavior.json"},
+                    "shard_format": {"container": "zip", "records": "records.json", "activations": "activations.npy",
+                                     "activation_axes": ["record", "observation", "field"], "fields": list(FIELDS),
+                                     "missing": "NaN relative_l2_change marks an undefined clean zero norm"}}
+            previous = self.manifest["attempts"][-1] if self.manifest["attempts"] else None
+            job.previous_attempt = previous
+            self.manifest["attempts"].append(str(job.directory))
+            self.manifest["state"] = "running"
+            atomic_json(path, self.manifest)
+            job.event("resume_validated" if existed else "run_created", identity_sha256=self.identity,
+                      reused_shards=len(self.manifest["shards"]), previous_attempt=previous)
+        except BaseException:
+            self.lock.close()
+            raise
+
+    def commit(self, key, records):
+        if key in self.manifest["shards"]:
+            raise ValueError("Cannot replace a committed shard")
+        if [r["work_key"] for r in records] != self.planned[key]:
+            raise ValueError("Chunk records differ from the planned work keys")
+        path = self.root / "shards" / f"{key}.zip"
+        write_chunk(path, records, self.observation_ids)
+        self.manifest["shards"][key] = {"path": f"shards/{key}.zip", "sha256": digest(path), "records": len(records)}
+        atomic_json(self.root / "manifest.json", self.manifest)
+        self.job.artifact(path)
+
+    def finish(self, state):
+        self.manifest["state"] = state
+        if state == "completed":
+            self.manifest["output_hashes"] = {name: digest(self.root / name) for name in ("similarities.csv", "behavior.json")}
+        atomic_json(self.root / "manifest.json", self.manifest)
+        self.job.artifact(self.root / "manifest.json")
+
+    def arrays(self):
+        """Committed records' metadata and stacked activation metrics, in planned order."""
+        meta, values = [], []
+        for key in self.manifest["planned_shards"]:
+            shard = self.manifest["shards"][key]
+            if digest(self.root / shard["path"]) != shard["sha256"]:
+                raise ValueError(f"Corrupt shard: {key}")
+            chunk_meta, chunk_values = read_chunk(self.root / shard["path"])
+            meta.extend(chunk_meta)
+            values.append(chunk_values)
+        return meta, np.concatenate(values) if values else np.zeros((0, len(self.observation_ids), len(FIELDS)), np.float32)
+
+    def records(self):
+        meta, values = self.arrays()
+        return list(expand(meta, values, self.observation_ids))
+
+    def close(self):
+        self.lock.close()

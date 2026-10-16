@@ -1,0 +1,26 @@
+# @package _global_
+# T05 pilot: induction + the four Tigges et al. tasks, zero/mean/matched-donor
+# replacements, whole components, 12 checkpoints. Pick the scale with
+# model=pythia_14m|pythia_160m|pythia_1b. Each checkpoint is loaded once.
+defaults:
+  - override /task: ioi
+  - override /scope: component
+  - override /resources: h100
+command: sweep
+resources:
+  disable_optional_vision: true
+execution:
+  backend: optimized
+  example_batch_size: 4
+  intervention_batch_size: 32
+  examples_per_shard: 16
+sweep:
+  checkpoints: [step0, step64, step256, step512, step1000, step2000, step4000, step8000, step16000, step33000, step66000, step143000]
+  tasks: [induction, ioi, gendered_pronoun, greater_than, sva]
+  replacements: [zero, mean, donor]
+  output_root: runs/pilot
+  # Leave unset for paper sizes (70/70/200/200); a value labels a development subset.
+  examples: null
+  calibration_examples: null
+  skip_incompatible: true
+  evict_checkpoint_cache: false
