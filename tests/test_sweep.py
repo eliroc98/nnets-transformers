@@ -19,7 +19,7 @@ class SweepContracts(unittest.TestCase):
             "sweep.checkpoints=[step0,step8]", "sweep.tasks=[induction]",
             "sweep.replacements=[zero,mean,donor,donor_resample]", "sweep.examples=3", "sweep.calibration_examples=2",
             "task.pattern_length=4", f"sweep.output_root={root}/sweep", "execution.backend=optimized",
-            "execution.example_batch_size=1", "execution.examples_per_shard=1", *extra])
+            "execution.example_batch_size=1", "execution.examples_per_shard=1", "sweep.compact=cosine16", *extra])
         return config
 
     def test_checkpoint_grouping_skips_and_resume(self):
@@ -49,6 +49,8 @@ class SweepContracts(unittest.TestCase):
             self.assertEqual([(s["replacement"], s["checkpoint"]) for s in manifest["skipped"]], [("donor", "all")])
             self.assertEqual(set(manifest["fixed_evaluation_data"]), {"induction/zero", "induction/mean", "induction/donor_resample"})
             cell = root / "sweep" / "pythia-14m" / "step8" / "induction" / "mean"
+            self.assertEqual(json.loads((cell / "manifest.json").read_text())["compaction"]["mode"], "cosine16")
+            self.assertFalse(list((cell / "shards").glob("*.zip")))
             saved = json.loads((cell / "manifest.json").read_text())
             self.assertEqual(saved["identity"]["configuration"]["model"]["revision"], REVISIONS["step8"])
             self.assertNotIn("sweep", saved["identity"]["configuration"])

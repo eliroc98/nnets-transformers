@@ -16,8 +16,8 @@ import pandas as pd
 SCHEMA = "normalized-experiment-v1"
 TABLES = ("checkpoints", "components", "edges", "behavior", "inventory", "roles")
 # Trajectory identity: the condition keys that define one training-progression series.
-TRAJECTORY_FIELDS = ("trajectory_id", "model_id", "training_seed", "task", "replacement", "scoring_version",
-                     "dataset_sha256", "dtype", "graph_version", "resolution")
+TRAJECTORY_FIELDS = ("trajectory_id", "model_id", "training_seed", "task", "replacement", "replacement_condition",
+                     "scoring_version", "evaluation_sha256", "dtype", "graph_version", "resolution")
 
 
 def _sha(path):

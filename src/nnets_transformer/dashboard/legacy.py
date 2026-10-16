@@ -9,6 +9,7 @@ import hashlib
 import json
 import pickle
 from pathlib import Path
+import re
 
 import pandas as pd
 
@@ -26,12 +27,31 @@ LIMITATIONS = [
 ]
 
 
+def parse_component(name):
+    """Legacy component names -> (layer, head, is_module_level); head is -1 for module level."""
+    if name in ("emb", "pos_emb"):
+        return -1, -1, True
+    if name == "logits":
+        return 90, -1, True
+    if name.startswith("mlp"):
+        digits = re.findall(r"\d+", name)
+        if not digits:
+            raise ValueError(f"cannot parse layer from MLP component {name!r}")
+        return int(digits[-1]), -1, True
+    parts = name.split(".")
+    if len(parts) < 3 or parts[0] != "attn":
+        raise ValueError(f"unrecognised component name {name!r}")
+    layer = int(parts[2])
+    if len(parts) == 3:
+        return layer, -1, True
+    return layer, int(parts[3]), False
+
+
 def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def import_legacy(source, output, job, quantile=.95):
-    from nnets_transformer.analysis.legacy_figures import parse_component
     source, output = Path(source), Path(output)
     if output.exists():
         raise FileExistsError(output)

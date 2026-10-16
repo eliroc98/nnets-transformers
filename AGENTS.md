@@ -35,7 +35,7 @@ The user clarified on 16 October 2026 that the expanded experiments should be ru
 
 Generate new dataset/pairing manifests, checkpoint-specific reference activations, measurements, graphs, analyses, and figures under new run IDs/output locations. Validate the new pipeline using deterministic scientific cases, source-model clean-logit/intervention checks, serial/optimized agreement, precision tolerances, and resume equivalence. Fresh execution and validation must work without old result files or successful historical comparisons. Preserve legacy artifacts and explicit graph/scoring versions for traceability and optional browsing.
 
-The current implementation includes root-level legacy scripts/notebook plus independent model/task/replacement/metric/execution modules, typed composed YAMLs, a fresh seeded induction reference with verified atomic shards/resume, CPU graph analysis with provenance/measurement coverage, and YAML-configured attempt logging. Broader entry-point/export migration, optimization, mean/donor replacements, and expanded task datasets remain pending. T01 is complete under the fresh-run scope; T02/T13 remain partial. Follow the persistent checklist for implemented details.
+The current implementation is the `nnets_transformer` package: independent model/task/replacement/metric/execution modules, typed composed YAMLs, serial and optimized execution with chunked resumable shards, checkpoint-grouped sweeps, the four paper tasks plus induction, zero/mean/donor replacements, CPU analysis/Parquet export, a CPU-only dashboard and shared attempt logging. The legacy root scripts, notebook and historical reference were removed (kept in Git history at `850411f`); their outputs are archived under ignored `artifacts/legacy-results/`. Open work: running pilot sweeps (T05b/T05c), OLMo (T06, blocked on adapter support) and optional T07/T08. Follow the persistent checklist for implemented details.
 
 **Architecture and extension rules**
 
@@ -45,7 +45,7 @@ The current implementation includes root-level legacy scripts/notebook plus inde
 - Keep intervention scopes to the existing whole-component and individual attention-head choices, using the current component inventory and applying replacements across all sequence positions. Represent an optional head index within the component selection. Separate replacement values (zero, mean, donor) and estimators (exact or gradient approximation) from these scopes. Task scoring positions and donor alignment belong to data/scoring preparation.
 - Introduce composed, typed YAML configurations during the refactor. Validate incompatible options early and save resolved configurations.
 - Keep notebooks focused on exploration and presentation; shared computation belongs in importable modules. Use one implementation of graph construction.
-- Keep current entry points and artifact readers usable during migration, or document an explicit replacement.
+- Keep entry points and artifact readers usable, or document an explicit replacement when removing one.
 
 **Interactive dashboard**
 
@@ -54,7 +54,7 @@ Follow [the dashboard plan](docs/dashboard-plan.md) and TODOs T09–T12. Keep da
 **Scientific correctness and reproducibility**
 
 - Preserve historical outputs as an archive; agreement with them is not required. Version changes to graph semantics, metrics, component inventories, or scoring rather than silently treating corrected results as equivalent to old results.
-- Known migration issues include double transformation of strengths in `graphs.py`, strength used as shortest-path distance in the notebook, disappearance of isolated nodes, and layer-only ordering. Consult the plan before changing these definitions.
+- The corrected graph definition `influence-v2` (single strength transform, separate positive path distance, complete inventory including isolates, architecture ordering) replaced the legacy conventions; see `docs/scientific-definitions.md`. Version any further change rather than editing it in place.
 - Separate behavioral effects from activation changes. Component/head ablation measures propagated influence; graph edges summarize downstream observations and do not define intervention scopes.
 - Follow [the Tigges et al. task/scoring specification](docs/tigges-2024-task-protocols.md) for the paper preset. Use logit differences for IOI/pronouns and group probability sums from full-vocabulary softmax for greater-than/SVA. Preserve clean answer definitions across paired runs, record sample/candidate manifests, and distinguish behavioral scores from optional head diagnostics. Keep the existing component/head intervention scopes.
 - Validate prediction positions, leading-space tokenization, candidate lengths, masks, and donor alignment for each tokenizer.
@@ -79,11 +79,11 @@ Target one H100 NVL with approximately 94 GiB of memory. Select the GPU through 
 
 Follow [the logging specification](docs/logging-plan.md), TODO T13. Persist logs for every experiment, analysis/export job, dashboard process, and substantive setup/test/profile command. Print log paths at startup; keep readable console/file output, structured events, and atomic live status under `logs/<run-or-job-id>/<attempt-id>/`. Record lifecycle stages, progress counters, heartbeat versus actual progress, warnings, tracebacks, exit status, saved artifacts, and resume instructions. Preserve prior attempt logs and link them from run manifests and handoff notes.
 
-Implement shared logging with package extraction and before long sweeps; wire it into every entry point. Until then, capture existing command stdout/stderr unbuffered with `tee` and shell `pipefail`, following the README. Do not claim structured status or heartbeats are implemented for the legacy scripts. Keep logging outside GPU hooks/hot loops and avoid tensor dumps or synchronization just for progress. Validate failure/interrupt/resume and concurrent logs, not only successful output. Every completed TODO should reference its validation log paths where applicable.
+Every entry point uses the shared `Job` logger; wire it into any new entry point before heavy setup, and wrap other substantive commands with `python -m nnets_transformer.observability`. Keep logging outside GPU hooks/hot loops and avoid tensor dumps or synchronization just for progress. Validate failure/interrupt/resume and concurrent logs, not only successful output. Every completed TODO should reference its validation log paths where applicable.
 
 **Version-control artifact policy**
 
-Keep Git focused on reproducible source/configuration: track source, cleared-output notebook code, documentation, small curated text fixtures, `pyproject.toml`, `poetry.lock`, `poetry.toml`, and `.python-version`. Put generated runs/results/logs, downloads, weights, activation dumps and plots in the ignored artifact directories. Use root-anchored rules for generated `analysis/`, `models/` and similar directories so package source remains visible; do not blanket-ignore CSV/JSON/JSONL source fixtures. Verify representative inclusion/exclusion paths with `git check-ignore` when updating rules.
+Keep Git focused on reproducible source/configuration: track source, cleared-output notebooks (if any), documentation, small curated text fixtures, `pyproject.toml`, `poetry.lock`, `poetry.toml`, and `.python-version`. Put generated runs/results/logs, downloads, weights, activation dumps and plots in the ignored artifact directories. Use root-anchored rules for generated `analysis/`, `models/` and similar directories so package source remains visible; do not blanket-ignore CSV/JSON/JSONL source fixtures. Verify representative inclusion/exclusion paths with `git check-ignore` when updating rules.
 
 Clear notebook outputs/execution counts before committing while preserving code/markdown and any needed local result archive. When removing generated files from Git tracking, preserve their local contents. Logs remain available locally even though they are ignored. Record concise verification evidence and log paths in the tracked TODO/handoff notes.
 
@@ -93,6 +93,6 @@ Use the required `nnets-transformer` pyenv environment through Poetry and the ex
 
 For implementation changes, start with small deterministic cases. Check no-op identity, replacement tensors, masks, hook cleanup, serial/batched equivalence, precision tolerances, and resume behavior as applicable. Validate a new model adapter against source-model clean logits and intervention semantics.
 
-`main.py` launches a checkpoint sweep and writes to fixed output paths; it is not a smoke test. Use the requested experiment scope and isolated output locations. Documentation-only changes need link/command inspection and whitespace checks, not model downloads or GPU experiments.
+`command=sweep` presets such as `+experiment=pilot` launch real multi-checkpoint GPU sweeps; they are not smoke tests (use `command=inspect` to preview a preset). Do not edit hashed source modules (`records.py`, `config.py`, `models/`, `tasks/`, `interventions/`, `metrics/`, `execution/`) while a sweep runs: each cell records their hashes when it starts. Use the requested experiment scope and isolated output locations. Documentation-only changes need link/command inspection and whitespace checks, not model downloads or GPU experiments.
 
 Keep archived data, generated figures, paper sources, and unrelated local edits intact. Update the README when implemented commands, dependencies, output formats, or capabilities change. Report what changed, what was checked, and any remaining limitations.

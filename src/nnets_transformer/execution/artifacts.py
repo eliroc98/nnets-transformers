@@ -79,6 +79,8 @@ def iter_records(root, manifest):
     root = Path(root)
     if manifest.get("schema_version") not in READABLE:
         raise ValueError("Unknown fresh artifact schema")
+    if manifest.get("compaction"):
+        raise ValueError("Compacted run: per-record activations were removed; read behavior_measurements.parquet instead")
     observation_ids = None
     for key in manifest["planned_shards"]:
         shard = manifest["shards"][key]
@@ -112,6 +114,8 @@ class Artifacts:
             plan = fingerprint(planned)
             if existed:
                 self.manifest = json.loads(path.read_text())
+                if self.manifest.get("compaction"):
+                    raise ValueError("Run was compacted after completion and is final; it cannot be resumed")
                 if self.manifest["schema_version"] != SCHEMA or self.manifest["identity_sha256"] != self.identity:
                     raise ValueError("Resume configuration/model/dataset/code identity differs")
                 for name, checksum in self.manifest["inputs"].items():
@@ -185,3 +189,106 @@ class Artifacts:
 
     def close(self):
         self.lock.close()
+
+
+# -- post-completion compaction ------------------------------------------------
+COMPACTION = "compacted-v1"
+COMPACT_MODES = {"cosine16", "means"}
+
+
+def load_dataset(root):
+    """dataset.json, or its gzip form after compaction."""
+    import gzip
+    root = Path(root)
+    if (root / "dataset.json").is_file():
+        return json.loads((root / "dataset.json").read_text())
+    return json.loads(gzip.decompress((root / "dataset.json.gz").read_bytes()))
+
+
+def _deterministic_zip(path, members):
+    temporary = path.with_name(path.name + ".tmp")
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name, data in members:
+            info = zipfile.ZipInfo(name, date_time=_EPOCH)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            bundle.writestr(info, data)
+    os.replace(temporary, path)
+
+
+def compact(root, mode, job=None):
+    """Shrink a completed run while keeping everything graph/behavior analysis reads.
+
+    Kept: manifest, resolved config, inventory, similarities.csv (mean per-example cosine),
+    behavior summaries, every per-example behavioral record (zstd Parquet), the dataset
+    manifest (gzip) and, for mode `cosine16`, per-example cosine similarities as float16.
+    Removed: the full float32 activation shards (relative L2 and zero-norm fields). The run
+    becomes final: it can be analysed and exported, but not resumed.
+    """
+    import gzip
+    import pandas as pd
+    if mode not in COMPACT_MODES:
+        raise ValueError(f"Compaction mode must be one of {sorted(COMPACT_MODES)}")
+    root = Path(root)
+    path = root / "manifest.json"
+    manifest = json.loads(path.read_text())
+    if manifest.get("compaction"):
+        return manifest["compaction"]
+    if manifest.get("state") != "completed" or manifest.get("schema_version") != SCHEMA:
+        raise ValueError("Only completed fresh-reference-v2 runs can be compacted")
+    for name, checksum in {**manifest["inputs"], **manifest["output_hashes"]}.items():
+        if digest(root / name) != checksum:
+            raise ValueError(f"Refusing to compact: checksum failed for {name}")
+    observation_ids = [o["hook"] if o["head"] is None else f"{o['hook']}.{o['head']}"
+                       for o in json.loads((root / "inventory.json").read_text())["observations"]]
+    meta, values = [], []
+    for key in manifest["planned_shards"]:
+        shard = manifest["shards"][key]
+        if digest(root / shard["path"]) != shard["sha256"]:
+            raise ValueError(f"Refusing to compact: corrupt shard {key}")
+        chunk_meta, chunk_values = read_chunk(root / shard["path"])
+        meta.extend(chunk_meta)
+        values.append(chunk_values)
+    values = np.concatenate(values)
+    behavior = json.loads((root / "behavior.json").read_text())
+    if len(behavior["measurements"]) != len(meta):
+        raise ValueError("Behavior measurements do not match the committed records")
+    frame = pd.DataFrame(behavior["measurements"])
+    frame.to_parquet(root / "behavior_measurements.parquet.tmp", compression="zstd", index=False)
+    os.replace(root / "behavior_measurements.parquet.tmp", root / "behavior_measurements.parquet")
+    behavior["measurements"] = {"path": "behavior_measurements.parquet", "rows": len(frame), "format": "parquet-zstd"}
+    atomic_json(root / "behavior.json", behavior)
+    data = (root / "dataset.json").read_bytes()
+    temporary = root / "dataset.json.gz.tmp"
+    temporary.write_bytes(gzip.compress(data, compresslevel=9, mtime=0))
+    os.replace(temporary, root / "dataset.json.gz")
+    outputs = {"similarities.csv": manifest["output_hashes"]["similarities.csv"], "behavior.json": digest(root / "behavior.json"),
+               "behavior_measurements.parquet": digest(root / "behavior_measurements.parquet")}
+    record = {"version": COMPACTION, "mode": mode, "removed_shards": {k: s["sha256"] for k, s in manifest["shards"].items()},
+              "removed_fields": ["relative_l2_change", "clean_zero_norm_fraction", "patched_zero_norm_fraction"] +
+                                (["cosine_similarity (per example)"] if mode == "means" else []),
+              "original_dataset_json_sha256": manifest["inputs"]["dataset.json"],
+              "original_behavior_json_sha256": manifest["output_hashes"]["behavior.json"]}
+    if mode == "cosine16":
+        array = io.BytesIO()
+        np.save(array, values[..., 0].astype(np.float16), allow_pickle=False)
+        index = [[r["work_key"], r["example_id"], r["intervention_id"]] for r in meta]
+        _deterministic_zip(root / "per_example_cosine.zip", [
+            ("records.json", json.dumps({"columns": ["work_key", "example_id", "intervention_id"], "rows": index}).encode()),
+            ("observations.json", json.dumps(observation_ids).encode()), ("cosine.npy", array.getvalue())])
+        outputs["per_example_cosine.zip"] = digest(root / "per_example_cosine.zip")
+        record["per_example"] = {"path": "per_example_cosine.zip", "dtype": "float16", "axes": ["record", "observation"],
+                                 "max_abs_rounding_error": float(np.abs(values[..., 0] - values[..., 0].astype(np.float16)).max())}
+    inputs = {k: v for k, v in manifest["inputs"].items() if k != "dataset.json"}
+    inputs["dataset.json.gz"] = digest(root / "dataset.json.gz")
+    manifest.update(inputs=inputs, output_hashes=outputs, compaction=record, shards={})
+    manifest["artifacts"] = {**manifest["artifacts"], "dataset": "dataset.json.gz",
+                             "behavior_measurements": "behavior_measurements.parquet",
+                             **({"per_example_cosine": "per_example_cosine.zip"} if mode == "cosine16" else {})}
+    atomic_json(path, manifest)
+    # Delete only after the compacted manifest is committed.
+    for key in record["removed_shards"]:
+        (root / "shards" / f"{key}.zip").unlink(missing_ok=True)
+    (root / "dataset.json").unlink(missing_ok=True)
+    if job is not None:
+        job.event("run_compacted", path=str(root), mode=mode, records=len(meta))
+    return record

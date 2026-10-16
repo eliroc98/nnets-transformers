@@ -22,7 +22,7 @@ from nnets_transformer.execution.runner import run, serial_records
 from nnets_transformer.execution.batching import records
 from nnets_transformer.observability import Job
 
-TOKENIZER = Path("models/historical-cache/models--EleutherAI--pythia-14m/snapshots/5b020995bfc7aee2931b0f35bd70cf7ee8b1db62")
+TOKENIZER = Path("models/hf-cache/models--EleutherAI--pythia-14m/snapshots/5b020995bfc7aee2931b0f35bd70cf7ee8b1db62")
 SOURCE = Path("artifacts/tigges-2024-source/supplement.zip")
 AVAILABLE = (TOKENIZER / "tokenizer.json").exists() and SOURCE.exists()
 TASKS = ("ioi", "gendered_pronoun", "greater_than", "sva")

@@ -1,7 +1,7 @@
 """Launch the dashboard or import legacy artifacts, with persistent attempt logs.
 
     python -m nnets_transformer.dashboard serve [--config configs/dashboard.yaml] [--host H] [--port P]
-    python -m nnets_transformer.dashboard import-legacy --source . --output exports/legacy-induction
+    python -m nnets_transformer.dashboard import-legacy --source artifacts/legacy-results --output exports/legacy-induction
 """
 import argparse
 from pathlib import Path
@@ -32,7 +32,7 @@ def main(argv=None):
     serve.add_argument("--port", type=int)
     serve.add_argument("--debug", action="store_true")
     legacy = sub.add_parser("import-legacy")
-    legacy.add_argument("--source", default=".")
+    legacy.add_argument("--source", default="artifacts/legacy-results")
     legacy.add_argument("--output", required=True)
     legacy.add_argument("--quantile", type=float, default=.95)
     for command in (serve, legacy):

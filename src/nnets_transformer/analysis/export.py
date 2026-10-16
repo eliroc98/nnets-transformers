@@ -19,7 +19,8 @@ def parquet(path, frame):
     os.replace(temporary, path)
 
 
-def normalize(roots, output, graph_config, job, thresholds=None, quantile=.95):
+def normalize(roots, output, graph_config, job, thresholds=None, quantile=.95, include_activations=True):
+    """Per-example activation rows are large (examples x sources x targets); the dashboard does not need them."""
     output = Path(output)
     if output.exists():
         raise FileExistsError(output)
@@ -50,18 +51,36 @@ def normalize(roots, output, graph_config, job, thresholds=None, quantile=.95):
             "training_seed": model.get("training_seed"), "task": configuration["task"]["name"],
             "replacement": configuration["replacement"]["name"], "scoring_version": identity["scoring_version"],
             "dataset_sha256": fresh["dataset_sha256"], "dtype": model.get("dtype", "float32")}
-        # Training runs/checkpoints share a trajectory only when condition keys
-        # agree; checkpoint revision itself is deliberately omitted.
+        # Checkpoints share a trajectory only when the condition agrees. Per-checkpoint
+        # labels (model/tokenizer commit, and the dataset hash that embeds the tokenizer
+        # commit) are replaced by content identities: tokenizer files and evaluation data.
+        from nnets_transformer.execution.artifacts import load_dataset, iter_records
+        dataset = load_dataset(root)
+        convention = dataset.get("replacement_convention") or {"replacement": common["replacement"]}
+        common["replacement_condition"] = "/".join(str(convention[k]) for k in
+            ("replacement", "direction", "donor_policy", "mean") if convention.get(k) is not None)
+        from nnets_transformer.execution.artifacts import fingerprint
+        common["evaluation_sha256"] = fingerprint({k: v for k, v in dataset.items() if k not in {"tokenizer_revision", "dataset_sha256"}})
+        files = model.get("tokenizer_files")
+        common["tokenizer_sha256"] = fingerprint(files) if files else model["tokenizer_revision"]
         trajectory_fields = {key: value for key, value in common.items() if key not in
-            {"run_id", "model_revision", "checkpoint", "step", "tokens_seen"}}
+            {"run_id", "model_revision", "tokenizer_revision", "dataset_sha256", "checkpoint", "step", "tokens_seen"}}
         common["trajectory_id"] = hashlib.sha256(json.dumps(trajectory_fields, sort_keys=True).encode()).hexdigest()
         sample_scores = {}
-        from nnets_transformer.execution.artifacts import iter_records
-        for record in iter_records(root, manifest):
+        if manifest.get("compaction"):
+            # Per-record activations were removed; behavior rows are kept in Parquet.
+            rows = pd.read_parquet(root / "behavior_measurements.parquet").to_dict("records")
+            for row in rows:
+                behaviors.append(common | row)
+                sample_scores[row["example_id"]] = row["clean_score"]
+            records = ()
+        else:
+            records = iter_records(root, manifest)
+        for record in records:
             behavioral = common | {"example_id": record["example_id"], "intervention_id": record["intervention_id"], **record["behavior"]}
             behaviors.append(behavioral)
             sample_scores[record["example_id"]] = record["behavior"]["clean_score"]
-            for observation in record["activations"]:
+            for observation in (record["activations"] if include_activations else ()):
                 activations.append(common | {"example_id": record["example_id"], "source": record["intervention_id"],
                                              "target": observation["observation_id"], **observation})
         frame = pd.read_csv(source, index_col=0)

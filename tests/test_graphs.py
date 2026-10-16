@@ -2,7 +2,7 @@ import unittest
 import pandas as pd
 import networkx as nx
 from nnets_transformer.analysis.graphs import (
-    Component, build_graph, centralities, CORRECTED, LEGACY_NOTEBOOK, LEGACY_RENDERER,
+    Component, build_graph, centralities, CORRECTED,
 )
 
 
@@ -22,13 +22,6 @@ class GraphContracts(unittest.TestCase):
     def graph(self, version=CORRECTED, **kwargs):
         return build_graph(self.frame, inventory=self.inventory, threshold=.7, version=version,
                            resolution=kwargs.pop("resolution", "component"), **kwargs)
-
-    def test_legacy_double_transform_and_active_nodes(self):
-        a, b = self.graph(LEGACY_NOTEBOOK), self.graph(LEGACY_RENDERER)
-        self.assertEqual(set(a), {"emb", "attn.q.0"})
-        self.assertEqual(list(a.edges), list(b.edges))
-        self.assertAlmostEqual(a["emb"]["attn.q.0"]["weight"], .8)
-        self.assertAlmostEqual(b["emb"]["attn.q.0"]["weight"], .2)
 
     def test_corrected_inventory_ordering_distance(self):
         graph = self.graph()

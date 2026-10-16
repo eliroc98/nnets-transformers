@@ -62,8 +62,8 @@ def completed(cell):
 
 def evaluation_fingerprint(output):
     """Evaluation/calibration/donor content, excluding per-checkpoint revision labels."""
-    from .artifacts import fingerprint
-    dataset = json.loads((Path(output) / "dataset.json").read_text())
+    from .artifacts import fingerprint, load_dataset
+    dataset = load_dataset(output)
     for name in ("tokenizer_revision", "dataset_sha256"):
         dataset.pop(name, None)
     return fingerprint(dataset)
@@ -94,7 +94,7 @@ def run_sweep(config, config_dir, job):
             raise FileExistsError(f"{cell.output_directory} exists; pass execution.resume=true")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     state = {"schema_version": SCHEMA, "model_id": config.model.id, "revisions": revisions,
-             "tasks": sweep.tasks, "replacements": sweep.replacements, "checkpoints": sweep.checkpoints,
+             "tasks": sweep.tasks, "replacements": sweep.replacements, "checkpoints": sweep.checkpoints, "compact": sweep.compact,
              "cells": [{**key, "output_directory": cell.output_directory, "state": "completed" if completed(cell) else "pending"}
                        for key, cell in planned],
              "skipped": skipped, "attempts": [*(previous or {}).get("attempts", []), str(job.directory)],
@@ -107,6 +107,12 @@ def run_sweep(config, config_dir, job):
     done = sum(cell["state"] == "completed" for cell in state["cells"])
     job.progress("cells", 0, total, skipped=done)
     fingerprints = dict(previous.get("fixed_evaluation_data", {})) if previous else {}
+    from .artifacts import compact
+    if sweep.compact != "none":
+        # Completed cells left uncompacted (e.g. interrupted right after completion).
+        for key, cell in planned:
+            if completed(cell):
+                compact(cell.output_directory, sweep.compact, job)
     processed = 0
     for checkpoint in sweep.checkpoints:
         todo = [(i, key, cell) for i, (key, cell) in enumerate(planned) if key["checkpoint"] == checkpoint and not completed(cell)]
@@ -129,6 +135,8 @@ def run_sweep(config, config_dir, job):
                 current = evaluation_fingerprint(cell.output_directory)
                 if fingerprints.setdefault(condition, current) != current:
                     raise ValueError(f"Evaluation data changed across checkpoints for {condition}")
+                if sweep.compact != "none":
+                    compact(cell.output_directory, sweep.compact, job)
                 state["cells"][index]["state"] = "completed"
                 state["fixed_evaluation_data"] = fingerprints
                 atomic_json(manifest_path, state)

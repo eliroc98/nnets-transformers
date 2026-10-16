@@ -4,4 +4,4 @@ revision: 5b020995bfc7aee2931b0f35bd70cf7ee8b1db62
 tokenizer_revision: 5b020995bfc7aee2931b0f35bd70cf7ee8b1db62
 n_layers: 6
 architecture: parallel
-cache_dir: models/historical-cache
+cache_dir: models/hf-cache

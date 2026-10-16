@@ -42,6 +42,9 @@ def build_fixture():
                 cfg.task.calibration_examples = 2
                 cfg.model.checkpoint = f"step{step}"
                 adapter = tiny()
+                # Like real sweeps, every checkpoint has its own model/tokenizer commit.
+                adapter.provenance.update(model_revision=f"rev-step{step}", tokenizer_revision=f"rev-step{step}",
+                                          tokenizer_files={"tokenizer.json": "same-content-every-checkpoint"})
                 # Distinct "checkpoints": perturb weights deterministically by step.
                 import torch
                 with torch.no_grad():
@@ -69,6 +72,10 @@ class DashboardContracts(unittest.TestCase):
         repo = self.repository
         self.assertEqual(repo.steps(self.export_id, self.zero), [0, 4, 16])
         self.assertEqual(repo.steps(self.export_id, self.mean), [0, 16])
+        # Per-checkpoint commits must not split a trajectory.
+        self.assertEqual(len(repo.trajectories(self.export_id)), 2)
+        self.assertEqual(set(repo.trajectories(self.export_id).replacement_condition),
+                         {"zero/noising", "mean/noising/position-aligned-example-mean-v1"})
         self.assertEqual(repo.thresholds(self.export_id, self.zero), [.5, .7])
         source = pd.read_parquet(self.export / "checkpoints.parquet")
         from nnets_transformer.dashboard import figures
@@ -84,6 +91,18 @@ class DashboardContracts(unittest.TestCase):
             self.assertAlmostEqual(score, unique, places=6)
         clean = next(t for t in figure.data if t.name == "clean score")
         self.assertEqual(len(clean.y), 3)
+
+    def test_four_level_trajectory_selection(self):
+        from nnets_transformer.dashboard.app import trajectory_levels, cascade
+        levels = trajectory_levels(self.repository.trajectories(self.export_id))
+        options, values, chosen, matches = cascade(levels, [None, None, "mean/noising/position-aligned-example-mean-v1", None])
+        self.assertEqual(chosen, self.mean)
+        self.assertEqual(matches, 1)
+        self.assertEqual(options[2], ["mean/noising/position-aligned-example-mean-v1", "zero/noising"])
+        _, values, chosen, _ = cascade(levels, values[:2] + ["not-a-condition", "nor-a-graph"])
+        self.assertEqual(chosen, levels.sort_values("replacement").trajectory_id.iloc[0])
+        _, values, chosen, _ = cascade(levels, [None]*4, preferred=self.zero)
+        self.assertEqual((chosen, values[2]), (self.zero, "zero/noising"))
 
     def test_step_zero_on_log_axis_and_tokens(self):
         from nnets_transformer.dashboard import figures
@@ -224,7 +243,7 @@ trajectory = repo.trajectories(export_id).trajectory_id.iloc[0]
 payload = {{"output": "..overview-graph.figure...checkpoint-summary.children...checkpoint-label.children..",
     "outputs": [{{"id": "overview-graph", "property": "figure"}}, {{"id": "checkpoint-summary", "property": "children"}},
                 {{"id": "checkpoint-label", "property": "children"}}],
-    "inputs": [{{"id": "export", "property": "value", "value": export_id}}, {{"id": "trajectory", "property": "value", "value": trajectory}},
+    "inputs": [{{"id": "export", "property": "value", "value": export_id}}, {{"id": "trajectory", "property": "data", "value": trajectory}},
                {{"id": "threshold", "property": "value", "value": 0.7}}, {{"id": "metric", "property": "value", "value": "pagerank"}},
                {{"id": "checkpoint", "property": "value", "value": 1}}, {{"id": "axis", "property": "value", "value": "step"}},
                {{"id": "log-x", "property": "value", "value": ["log"]}}],

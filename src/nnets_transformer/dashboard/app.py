@@ -27,9 +27,42 @@ def _options(values, label=str):
 
 
 def _trajectory_label(row):
-    parts = [row.get("model_id"), row.get("task"), row.get("replacement"), row.get("graph_version"),
+    parts = [row.get("model_id"), row.get("task"), row.get("replacement_condition") or row.get("replacement"), row.get("graph_version"),
              row.get("resolution"), row.get("dtype"), row.get("training_seed")]
     return " · ".join(str(p) for p in parts if p is not None and p == p) + f" [{row['checkpoints']} ckpts]"
+
+
+LEVELS = (("traj-model", "model", "Model"), ("traj-task", "task", "Task"),
+          ("traj-replacement", "replacement", "Replacement"), ("traj-graph", "graph", "Graph"))
+
+
+def trajectory_levels(frame):
+    """One row per trajectory with the four selector keys (model, task, replacement, graph)."""
+    rows = []
+    for r in frame.to_dict("records"):
+        model = str(r.get("model_id"))
+        extras = [str(v) for k, v in (("training_seed", r.get("training_seed")), ("dtype", r.get("dtype")))
+                  if v is not None and v == v and v not in {"standard-release", "float32"}]
+        rows.append({"trajectory_id": r["trajectory_id"], "checkpoints": r.get("checkpoints"),
+                     "model": " · ".join([model, *extras]), "task": str(r.get("task")),
+                     "replacement": str(r.get("replacement_condition") or r.get("replacement")),
+                     "graph": f"{r.get('graph_version')} · {r.get('resolution')}"})
+    return pd.DataFrame(rows, columns=["trajectory_id", "checkpoints", "model", "task", "replacement", "graph"])
+
+
+def cascade(levels, chosen, preferred=None):
+    """Valid options per level given earlier choices; keep a choice if still valid, else the first option."""
+    if preferred is not None and preferred in set(levels.trajectory_id):
+        row = levels[levels.trajectory_id == preferred].iloc[0]
+        chosen = [row[key] for _, key, _ in LEVELS]
+    subset, options, values = levels, [], []
+    for (_, key, _), value in zip(LEVELS, chosen):
+        available = sorted(subset[key].unique())
+        value = value if value in available else (available[0] if available else None)
+        options.append(available)
+        values.append(value)
+        subset = subset[subset[key] == value]
+    return options, values, (subset.trajectory_id.iloc[0] if len(subset) else None), len(subset)
 
 
 def create_app(repository, config, job=None):
@@ -74,8 +107,9 @@ def create_app(repository, config, job=None):
         html.H3("Component-influence graphs over training"),
         html.Div([
             html.Div([html.Label("Export"), dcc.Dropdown(id="export", clearable=False, style={"width": "330px"})], style=control),
-            html.Div([html.Label("Trajectory (model · task · replacement · graph)"),
-                      dcc.Dropdown(id="trajectory", clearable=False, style={"width": "560px"})], style=control),
+            *[html.Div([html.Label(label), dcc.Dropdown(id=component, clearable=False, style={"width": width})], style=control)
+              for (component, _, label), width in zip(LEVELS, ("230px", "170px", "330px", "190px"))],
+            dcc.Store(id="trajectory"),
             html.Div([html.Label("Threshold"), dcc.Dropdown(id="threshold", clearable=False, style={"width": "110px"})], style=control),
             html.Div([html.Label("Component metric"), dcc.Dropdown(id="metric", clearable=False, style={"width": "170px"})], style=control),
             html.Div([html.Label("Training axis"), dcc.RadioItems(id="axis", options=[{"label": "steps", "value": "step"},
@@ -179,22 +213,32 @@ def create_app(repository, config, job=None):
         options = [{"label": f"{e['name']}{' (legacy)' if e['legacy'] else ''}", "value": key} for key, e in repository.catalog.items()]
         return options, state.export_id, "\n".join(notes)
 
-    @app.callback(Output("trajectory", "options"), Output("trajectory", "value"), Input("export", "value"), State("requested-view", "data"))
+    @app.callback(*[Output(component, prop) for component, _, _ in LEVELS for prop in ("options", "value")],
+                  Output("trajectory", "data"), Input("export", "value"),
+                  *[Input(component, "value") for component, _, _ in LEVELS], State("requested-view", "data"))
     @logged("trajectories")
-    def trajectories(export_id, data):
+    def trajectories(export_id, *values_and_view):
+        *chosen, data = values_and_view
         if not export_id:
-            return [], None
-        frame = repository.trajectories(export_id)
-        state = requested_state(data)
-        state.export_id = export_id
-        state, _ = reconcile(state, repository)
-        return [{"label": _trajectory_label(r), "value": r["trajectory_id"]} for r in frame.to_dict("records")], state.trajectory_id
+            return [*([], None)*len(LEVELS), None]
+        levels = trajectory_levels(repository.trajectories(export_id))
+        preferred = None
+        if ctx.triggered_id in (None, "export"):
+            state = requested_state(data)
+            state.export_id = export_id
+            state, _ = reconcile(state, repository)
+            preferred = state.trajectory_id
+        options, values, trajectory_id, _ = cascade(levels, chosen, preferred)
+        result = []
+        for available, value in zip(options, values):
+            result += [_options(available), value]
+        return [*result, trajectory_id]
 
     @app.callback(Output("threshold", "options"), Output("threshold", "value"), Output("metric", "options"), Output("metric", "value"),
                   Output("checkpoint", "max"), Output("checkpoint", "marks"), Output("pinned", "options"),
                   Output("compare", "options"), Output("dist-steps", "options"), Output("compare-step", "options"),
                   Output("axis", "value"), Output("log-x", "value"), Output("provenance", "children"),
-                  Input("trajectory", "value"), State("export", "value"), State("requested-view", "data"))
+                  Input("trajectory", "data"), State("export", "value"), State("requested-view", "data"))
     @logged("trajectory_controls")
     def controls(trajectory_id, export_id, data):
         if not export_id or not trajectory_id:
@@ -220,7 +264,7 @@ def create_app(repository, config, job=None):
 
     @app.callback(Output("checkpoint", "value"), Input("overview-graph", "clickData"), Input("previous", "n_clicks"),
                   Input("next", "n_clicks"), Input("checkpoint", "max"), State("checkpoint", "value"),
-                  State("trajectory", "value"), State("export", "value"), State("requested-view", "data"))
+                  State("trajectory", "data"), State("export", "value"), State("requested-view", "data"))
     @logged("checkpoint_selection")
     def select_checkpoint(click, _previous, _next, maximum, value, trajectory_id, export_id, data):
         if not export_id or not trajectory_id:
@@ -239,7 +283,7 @@ def create_app(repository, config, job=None):
         state, _ = reconcile(state, repository)
         return steps.index(state.step) if state.step in steps else len(steps)-1
 
-    @app.callback(Output("pinned", "value"), Input("ranking", "active_cell"), Input("trajectory", "value"),
+    @app.callback(Output("pinned", "value"), Input("ranking", "active_cell"), Input("trajectory", "data"),
                   State("ranking", "data"), State("pinned", "value"), State("export", "value"), State("requested-view", "data"))
     @logged("pinning")
     def pin(cell, trajectory_id, rows, pinned, export_id, data):
@@ -253,7 +297,7 @@ def create_app(repository, config, job=None):
         state, _ = reconcile(state, repository)
         return state.pinned
 
-    selection = [Input("export", "value"), Input("trajectory", "value"), Input("threshold", "value"), Input("metric", "value"),
+    selection = [Input("export", "value"), Input("trajectory", "data"), Input("threshold", "value"), Input("metric", "value"),
                  Input("checkpoint", "value")]
 
     def ready(*values):
@@ -335,7 +379,7 @@ def create_app(repository, config, job=None):
         return figures.roles(rows, metric, log_x=state.log_x), text, figures.similarity_matrix(components, metric, float(quantile))
 
     @app.callback(Output("compare-graph", "figure"), Output("behavior-facets", "figure"), Output("compare-notes", "children"),
-                  Input("export", "value"), Input("trajectory", "value"), Input("threshold", "value"), Input("compare", "value"),
+                  Input("export", "value"), Input("trajectory", "data"), Input("threshold", "value"), Input("compare", "value"),
                   Input("compare-column", "value"), Input("axis", "value"), Input("log-x", "value"))
     @logged("compare")
     def compare(export_id, trajectory_id, threshold, others, column, axis, log_x):
@@ -353,7 +397,7 @@ def create_app(repository, config, job=None):
             if rows.empty:
                 notes.append(f"Excluded {trajectory[:10]}: threshold {threshold} not precomputed.")
                 continue
-            name = f"{meta.get('model_id')} · {meta.get('task')} · {meta.get('replacement')}"
+            name = f"{meta.get('model_id')} · {meta.get('task')} · {meta.get('replacement_condition') or meta.get('replacement')}"
             series[name] = rows
             units = repository.select(export_id, "behavior", trajectory)
             unit = units.units.iloc[0] if not units.empty and "units" in units else "score units"

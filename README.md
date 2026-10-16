@@ -2,7 +2,7 @@
 
 How does a Transformer's component influence network evolve during training?
 
-This research project intervenes on internal Transformer activations, measures downstream changes, constructs directed influence graphs, and follows graph topology and component roles across training checkpoints. The fresh runner supports the **Pythia family** (14M–2.8B configured, plus deduplicated and training-seed variants), **exact zero, calibrated-mean and donor activation replacement** (noising and matched denoising), a **seeded induction probe** and the four **Tigges et al. (2024) paper tasks** (IOI, gendered pronouns, greater-than, SVA), with checkpoint-grouped sweeps, CPU analysis/export and a CPU-only dashboard. The original fixed-passage workflow remains available as legacy tooling.
+This research project intervenes on internal Transformer activations, measures downstream changes, constructs directed influence graphs, and follows graph topology and component roles across training checkpoints. The fresh runner supports the **Pythia family** (14M–2.8B configured, plus deduplicated and training-seed variants), **exact zero, calibrated-mean and donor activation replacement** (noising and matched denoising), a **seeded induction probe** and the four **Tigges et al. (2024) paper tasks** (IOI, gendered pronouns, greater-than, SVA), with checkpoint-grouped sweeps, CPU analysis/export and a CPU-only dashboard.
 
 The [experiment expansion plan](docs/experiment-expansion-plan.md) describes the proposed modular package, experiment YAMLs, optimization work, additional models, replacement methods, and inference-only NLP tasks. [AGENTS.md](AGENTS.md) provides guidance for contributors and coding agents. The [interactive dashboard plan](docs/dashboard-plan.md) specifies the implemented linked training-metric plots, component drill-down, run comparisons and network exploration from saved results.
 
@@ -14,10 +14,7 @@ The expanded work will run experiments afresh with improved methods while retain
 |---|---|
 | [src/nnets_transformer/](src/nnets_transformer/) | Typed config/CLI, model adapters, tasks, replacements, serial and optimized execution, sweeps, CPU analysis/export, dashboard and attempt logging |
 | [configs/](configs/) and [tests/](tests/) | Composed YAMLs and deterministic scientific/execution validation |
-| [main.py](main.py) | Discover Pythia checkpoints, run zero ablations, save activation similarities and behavioral scores |
-| [graphs.py](graphs.py) | Render thresholded influence graphs from checkpoint CSV matrices |
-| [graph_analysis.ipynb](graph_analysis.ipynb) | Construct graphs, compute network metrics, and explore trajectories |
-| [cn_figures.py](cn_figures.py) | Generate topology, centrality, turnover, and component-role figures from notebook exports |
+| [scripts/](scripts/) | Source-model clean-logit check and execution/logging profilers |
 | [pyproject.toml](pyproject.toml) | Poetry dependencies and Python requirement |
 | [docs/experiment-expansion-plan.md](docs/experiment-expansion-plan.md) | Design, TODO checklist with completion evidence, and session handoff |
 
@@ -55,7 +52,7 @@ The first command must report `false`; the second must identify the specified py
 poetry install
 ```
 
-This installs the source package and `nnets-transformer` CLI alongside the legacy scripts. Use `poetry add`, `poetry remove`, and the project lockfile for dependency changes. Reuse this same environment for experiments, tests, notebooks, and the dashboard; do not create another virtualenv. Avoid incidental lockfile refreshes during implementation or fresh experiments. TransformerLens is pinned to baseline Git commit `50ee38b9a20695e90b8ce6a4aa20fd509c8175d9`. Hydra/OmegaConf were added for configuration; all pre-existing locked versions/revisions were retained. The dashboard's dependencies are optional Poetry groups (`dashboard`: Dash, dash-cytoscape; `dashboard-test`: Selenium), installed with `poetry install --with dashboard` (add `,dashboard-test` for the browser test); adding them changed no existing locked version. On this machine, `POETRY_SYSTEM_GIT_CLIENT=true poetry install` avoids a Dulwich chmod failure in the pre-existing shared source checkout.
+This installs the source package and the `nnets-transformer` CLI. Use `poetry add`, `poetry remove`, and the project lockfile for dependency changes. Reuse this same environment for experiments, tests, notebooks, and the dashboard; do not create another virtualenv. Avoid incidental lockfile refreshes during implementation or fresh experiments. TransformerLens is pinned to baseline Git commit `50ee38b9a20695e90b8ce6a4aa20fd509c8175d9`. Hydra/OmegaConf were added for configuration; all pre-existing locked versions/revisions were retained. The dashboard's dependencies are optional Poetry groups (`dashboard`: Dash, dash-cytoscape; `dashboard-test`: Selenium), installed with `poetry install --with dashboard` (add `,dashboard-test` for the browser test); adding them changed no existing locked version. On this machine, `POETRY_SYSTEM_GIT_CLIENT=true poetry install` avoids a Dulwich chmod failure in the pre-existing shared source checkout.
 
 Check PyTorch without downloading a model:
 
@@ -105,6 +102,14 @@ Every command below runs from the repository root after the environment exports 
    - `model=pythia_160m_seed1` runs a training-seed replicate.
    - `resources.dtype=bfloat16` is an opt-in precision condition; FP32 is the default.
 
+   **Everything (all main Pythia models × all 154 checkpoints × 5 tasks × 6 replacements):** run `scripts/run_everything.sh` in tmux, and preview it first with `DRY_RUN=1 scripts/run_everything.sh`. It processes models smallest first and writes to `runs/full/`. After each cell it compacts the results (`sweep.compact`). Compaction keeps:
+   - the similarity matrix;
+   - all per-example behavioral rows;
+   - the manifests;
+   - per-example cosines as float16.
+
+   It deletes the bulky float32 activation shards (relative L2 and zero-norm fields), so the whole grid needs about 115 GB instead of terabytes. A compacted cell is final: it can be exported and analysed, but not resumed. The script skips models that would not fit above `MIN_FREE_GB` (default 100), and pauses resumably if disk runs low. Ctrl+C stops it; rerunning the same command continues. This is a months-long GPU job, so expect to stop and resume it.
+
 4. Resume an interrupted sweep by repeating its command with `execution.resume=true`. Completed cells are skipped without loading their checkpoint, and partial cells resume from verified shards. The exact command is also saved as `resume_command` in the attempt's `status.json`. Changed code or scientific settings invalidate resume by design, so use a new `sweep.output_root` for a new condition.
 
 5. Export a trajectory (several checkpoints of one task/replacement) to normalized Parquet tables and a standalone HTML report, on CPU:
@@ -115,13 +120,13 @@ Every command below runs from the repository root after the environment exports 
      output_directory=exports/pilot-14m-ioi-mean
    ```
 
-   `export.inputs` can list several conditions; trajectories are separated by condition keys. Thresholds default to 0.1/0.3/0.5/0.7, and upper-tail roles to the 0.95 quantile. Analysing a single run as a graph remains `+experiment=analysis input_matrix=RUN/similarities.csv output_directory=...`.
+   `export.inputs` can list several conditions; checkpoints of one condition form one trajectory. The per-example activation table is large and off by default (`export.include_activations=true` adds it for uncompacted runs). Thresholds default to 0.1/0.3/0.5/0.7, and upper-tail roles to the 0.95 quantile. Analysing a single run as a graph remains `+experiment=analysis input_matrix=RUN/similarities.csv output_directory=...`.
 
 6. Browse the exports in the dashboard (CPU-only; reads `exports/` as set in [configs/dashboard.yaml](configs/dashboard.yaml)):
 
    ```bash
    poetry install --with dashboard          # once
-   poetry run python -m nnets_transformer.dashboard import-legacy --source . --output exports/legacy-induction   # optional, existing results
+   poetry run python -m nnets_transformer.dashboard import-legacy --output exports/legacy-induction   # optional: archived paper results
    poetry run python -m nnets_transformer.dashboard serve      # http://127.0.0.1:8050/
    ```
 
@@ -156,102 +161,36 @@ Every record keeps raw clean/corrupt/patched scores. Recovery `(patched - corrup
 
 Runs write `manifest.json`, `resolved.yaml`, `dataset.json` (sample, calibration and donor manifests), `inventory.json`, chunked checksummed shards `shards/*.zip` (schema `fresh-reference-v2`: JSON behavior plus float32 activation arrays), `similarities.csv` (mean per-example cosine) and `behavior.json`. Resume verifies code, config, model and dataset identities, input and shard hashes, and the work plan. Example batches align with shards, so resumed outputs are bit-identical. The optimized backend (`execution.backend=optimized`, the default in sweep presets) reuses clean and corrupt caches per example batch. It runs independent interventions in separate batch slices and agrees with the serial reference within FP32 tolerance.
 
-The optional `+experiment=historical` / `scripts/reproduce_historical.py` tools keep their previous comparison behavior solely as archived diagnostics. They are not prerequisites for new experiments. See [scientific definitions](docs/scientific-definitions.md).
+To validate a model adapter against the source Hugging Face model's clean logits, run `poetry run python scripts/check_clean_adapter.py --disable-optional-vision --model EleutherAI/pythia-14m --revision SHA --output runs/adapter-check.json`. The checkpoint must already be in `models/hf-cache`. See [scientific definitions](docs/scientific-definitions.md) for the versioned graph, metric and storage conventions.
 
 The test suite needs no model downloads. It uses the locally cached Pythia-14M tokenizer and the supplement for the paper-task checks, and skips them if those are absent. The dashboard browser check needs `--with dashboard-test` and Chrome. Fixture artifacts are kept under ignored `artifacts/`.
 
-**Existing experiment workflow**
+**Process logs**
 
-Run commands from the repository root after environment setup.
-
-1. Generate the current experiment outputs:
-
-   ```bash
-   mkdir -p logs
-   log_dir="$(mktemp -d logs/induction.XXXXXX)"
-   printf 'Log directory: %s\n' "$log_dir"
-   set -o pipefail
-   CUDA_VISIBLE_DEVICES=0 poetry run python -u main.py 2>&1 | tee "$log_dir/console.log"
-   ```
-
-   Select an available GPU through `CUDA_VISIBLE_DEVICES`. This command discovers remote checkpoint branches and runs a sweep; it can download weights and take substantial time. The model, passage, and checkpoint handling are defined in `main.py`, with no experiment CLI yet. The declared sentence-count and sequence-length settings do not currently control a dataset.
-
-   The script writes `ablation_data/step*.csv`, `induction_data.json`, and `loss_data.json` relative to the working directory and can overwrite existing outputs. Use a separate working copy or preserve prior outputs before rerunning.
-
-2. Open `graph_analysis.ipynb` in a notebook environment using the activated `nnets-transformer` pyenv interpreter. Run its graph-construction and metric-export cells to produce:
-
-   - `all_metrics.pickle`
-   - `all_distributions.pickle`
-   - `edge_weights.pickle`
-   - `graphs_by_threshold_and_step.pickle`
-
-   These exports can also be used directly when already available locally.
-
-3. Generate figures from the metric exports:
-
-   ```bash
-   poetry run python cn_figures.py --data . --out figures
-   ```
-
-   Select particular figures or an alternative stream layout:
-
-   ```bash
-   poetry run python cn_figures.py --data . --out figures --only turnover regimes
-   poetry run python cn_figures.py --data . --out figures --only streams --streams-style stack
-   ```
-
-   Use a different `--out` directory to keep separate figure versions. Available options are shown by `poetry run python cn_figures.py --help`.
-
-For the existing per-checkpoint graph renderer:
-
-```bash
-poetry run python graphs.py --input_dir ablation_data --output_dir analysis_plots --threshold 0.7
-```
-
-Its edge-weight convention currently differs from the notebook as described below. Generated datasets, matrices, pickles, and some analysis directories are ignored by Git and may be absent in a fresh checkout.
-
-**Following process logs**
-
-The experiment command above saves both stdout and stderr to its printed `logs/induction.XXXXXX/console.log` while displaying them in the terminal. `-u` makes Python output unbuffered, and Bash `pipefail` preserves a failing command's pipeline status. Use the same capture pattern for graph/figure jobs and substantive setup/test/profile commands. Generated `logs/` files are kept locally and ignored by Git.
-
-Follow the printed log path from another terminal, for example:
-
-```bash
-tail -F logs/induction.REPLACE_WITH_PRINTED_ID/console.log
-```
-
-This capture works with the current scripts. The new package CLI and bounded reference write timestamped `console.log`, `events.jsonl`, atomic `status.json`, and `invocation.json` under `logs/JOB_ID/ATTEMPT_ID/`. They capture warnings/exceptions and distinguish last actual progress from heartbeat. Each invocation gets a new attempt; logs are diagnostic records, and do not authorize scientific artifact reuse. The base logger is tested for failure, signals, concurrent attempts and live inspection. Fresh CLI YAMLs configure levels, timezone and heartbeat/progress intervals. Sweeps, exports and the dashboard use the same logger; the dashboard's **Run status / logs** tab shows attempts, counters, heartbeat versus last progress, possible staleness and bounded log tails.
-
-Wrap legacy scripts, tests and setup/profile commands for structured capture without editing their behavior:
+Every command above writes timestamped `console.log`, `events.jsonl`, an atomic live `status.json` and `invocation.json` under `logs/JOB_ID/ATTEMPT_ID/`. These record warnings, exceptions, exit codes, progress counters and resume commands, and distinguish last actual progress from heartbeat. Each invocation gets a new attempt directory, and logs never authorize reusing scientific artifacts. Follow a running job with `tail -F logs/JOB_ID/ATTEMPT_ID/console.log`, or use the dashboard's **Run status / logs** tab. Wrap any other command for the same structured capture:
 
 ```bash
 poetry run -- python -m nnets_transformer.observability --job-id validation -- \
   python -u -m unittest discover -s tests -v
 ```
 
-Use `--artifact-root PATH`, `--resume-command TEXT`, and `--previous-attempt PATH` to record job context. Resume references preserve prior logs; callers must validate scientific manifests before reusing artifacts. `--log-root PATH` and `--heartbeat-seconds SECONDS` control log placement/liveness updates. Logs use Europe/Rome timestamps and preserve subprocess exit codes. Root legacy scripts still require this wrapper or the tee recipe; their own terminal messages alone do not provide structured status or heartbeat.
+`--artifact-root PATH`, `--resume-command TEXT` and `--previous-attempt PATH` record job context. `--log-root PATH` and `--heartbeat-seconds SECONDS` control log placement and liveness updates. YAML `logging.*` settings configure levels, timezone, intervals, rotation and telemetry.
 
-**Interpreting current results**
+**Interpreting results**
 
-Each similarity matrix has ablated sources as rows and observed targets as columns. The intended influence strength is `1 - cosine_similarity`; graph construction retains admissible source/target pairs below a similarity threshold. The behavioral outputs contain the selected continuation-token logit and language-model loss.
+Each similarity matrix has intervened sources as rows and observed targets as columns. Influence strength is `1 - cosine_similarity`. Graphs (`influence-v2`) keep admissible source/target pairs strictly below a similarity threshold, keep isolated inventory nodes, order components by architecture reachability, and use the separate positive distance `1 / (strength + epsilon)` for shortest paths. The influence graph measures propagated sensitivity to component or head replacement; it does not isolate individual causal paths. Upper-tail graph positions are descriptive structural roles, not validated functional mechanisms.
 
-Several limitations are identified for the refactor:
+**Archived results**
 
-- The current task uses one passage and a fixed vocabulary index, so it cannot be transferred directly to arbitrary tokenizers.
-- The clean forward/cache is repeated for every intervention.
-- `graphs.py` applies the strength transformation twice, while the notebook applies it once.
-- The notebook uses influence strength as shortest-path distance and inserts nodes only through retained edges.
-- Layer-only ordering and overlapping module/head nodes need explicit architecture-aware definitions.
-
-Correcting these definitions requires versioned results so historical and revised analyses remain traceable. The present influence graph measures propagated sensitivity to component ablation; it does not isolate individual causal paths.
+The original fixed-passage workflow (`main.py`, `graphs.py`, `cn_figures.py`, `graph_analysis.ipynb` and the historical reference tooling) was removed from the working tree on 16 October 2026; it remains in Git history at commit `850411f`. Its local outputs are under the ignored `artifacts/legacy-results/`: `ablation_data/`, the notebook pickles, `induction_data.json`, `loss_data.json`, figures, the `analysis*` directories and early reference runs. `python -m nnets_transformer.dashboard import-legacy` makes them browsable, with their legacy semantics labeled.
 
 **What belongs in Git**
 
-Keep source code, notebook code with cleared outputs, experiment/configuration files, documentation, small curated text inputs/fixtures, `pyproject.toml`, `poetry.lock`, `poetry.toml`, and `.python-version` eligible for version control. The lockfile preserves the dependency resolution used to reproduce experiments; do not regenerate it incidentally.
+Keep source code, experiment/configuration files, documentation, small curated text inputs/fixtures, `pyproject.toml`, `poetry.lock`, `poetry.toml`, and `.python-version` eligible for version control. The lockfile preserves the dependency resolution used to reproduce experiments; do not regenerate it incidentally.
 
 [.gitignore](.gitignore) excludes generated runs/results, logs and monitoring state, analysis exports/figures, downloaded datasets/models, caches, model weights, serialized tensors/tables, archives, and local environment/tool state. Generated directory rules are anchored to the repository root so future source packages such as `src/nnets_transformer/analysis/` and `src/nnets_transformer/models/` stay visible. Curated CSV/JSON/JSONL fixtures under source/configuration/test directories remain eligible.
 
-Generated figures have been removed from Git tracking and remain available locally. `graph_analysis.ipynb` retains its code/markdown with outputs cleared; the prior full-output version is kept locally under `artifacts/legacy-notebooks/graph_analysis.with-outputs.ipynb`. Future notebook edits should also clear outputs before committing. Keep downloaded inputs and generated exports under the designated ignored directories and record reproducible generators, seeds, versions and source hashes in tracked configuration/documentation.
+Notebooks, if added, should be committed with outputs cleared. Keep downloaded inputs and generated exports under the designated ignored directories and record reproducible generators, seeds, versions and source hashes in tracked configuration/documentation.
 
 **Planned expansion**
 

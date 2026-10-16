@@ -1,9 +1,8 @@
-"""Logged configuration inspection, bounded reference execution and CPU analysis."""
+"""Logged configuration inspection, experiment runs/sweeps, CPU analysis and export."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 from nnets_transformer.observability import Job, Interrupted, atomic_json
 
@@ -52,15 +51,10 @@ def main():
             elif config.command == "run":
                 from .execution.runner import run
                 run(config, yaml, job)
-            elif config.command == "reference":
-                from .execution.historical import run
-                run(SimpleNamespace(checkpoint=config.model.checkpoint, revision=config.model.revision,
-                    output=Path(config.output_directory), device=config.resources.device,
-                    historical_root=Path(config.task.historical_root), cache_dir=Path(config.model.cache_dir),
-                    disable_optional_vision=config.resources.disable_optional_vision), job, resolved_yaml=yaml)
             elif config.command == "export":
                 from .analysis.export import normalize
-                normalize(config.export.inputs, config.output_directory, config.graph, job, config.export.thresholds, config.export.quantile)
+                normalize(config.export.inputs, config.output_directory, config.graph, job, config.export.thresholds, config.export.quantile,
+                          include_activations=config.export.include_activations)
             elif config.command == "analyze":
                 analyze(config, yaml, job)
             elif config.command == "sweep":
@@ -80,16 +74,16 @@ def analyze(config, yaml, job):
     # Only CPU artifact dependencies; importing this CLI never imports models.
     import pandas as pd
     import networkx as nx
-    from .analysis.graphs import Component, build_graph, centralities
+    from .analysis.graphs import build_graph, centralities
     job.stage("analysis", graph_version=config.graph.version)
     source = Path(config.input_matrix)
     from .analysis.artifacts import read_fresh
     fresh = read_fresh(source)
+    if fresh is None:
+        raise ValueError(f"{source} is not the similarities export of a completed, manifested run")
     frame = pd.read_csv(source, index_col=0)
-    inventory = fresh["inventory"] if fresh else [Component.parse(n, config.model.n_layers)
-                for n in dict.fromkeys([*frame.index, *frame.columns])]
-    graph = build_graph(frame, inventory=inventory, threshold=config.graph.similarity_threshold,
-                        version=config.graph.version, architecture=fresh["architecture"] if fresh else config.model.architecture,
+    graph = build_graph(frame, inventory=fresh["inventory"], threshold=config.graph.similarity_threshold,
+                        version=config.graph.version, architecture=fresh["architecture"],
                         resolution=config.graph.resolution, epsilon=config.graph.epsilon)
     metrics = centralities(graph)
     output = Path(config.output_directory)
@@ -100,13 +94,11 @@ def analyze(config, yaml, job):
     atomic_json(output / "manifest.json", {
         "schema_version": "graph-analysis-v1", "state": "completed", "source": str(source.resolve()),
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "graph": graph.graph,
-        "inventory_provenance": fresh["inventory_provenance"] if fresh else "union of unmanifested source/observation labels; original inventory unknown",
-        "dataset_sha256": fresh["dataset_sha256"] if fresh else None,
-        "aggregation": fresh["aggregation"] if fresh else "unknown input aggregation",
-        "source_run_identity": fresh["manifest"]["identity_sha256"] if fresh else None,
+        "inventory_provenance": fresh["inventory_provenance"], "dataset_sha256": fresh["dataset_sha256"],
+        "aggregation": fresh["aggregation"], "source_run_identity": fresh["manifest"]["identity_sha256"],
         "artifacts": {"graph": "graph.json", "metrics": "metrics.json", "resolved_config": "resolved.yaml"},
         "num_nodes": graph.number_of_nodes(), "num_edges": graph.number_of_edges(),
-        "log_directory": str(job.directory), "scoring_version": fresh["scoring_version"] if fresh else None,
+        "log_directory": str(job.directory), "scoring_version": fresh["scoring_version"],
         "resolved_config": str((output / "resolved.yaml").resolve()),
     })
     job.progress("graphs", 1, 1)

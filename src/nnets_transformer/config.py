@@ -16,14 +16,13 @@ class Model:
     checkpoint: str = "step1000"
     n_layers: int = 6
     architecture: str = "parallel"
-    cache_dir: str = "models/historical-cache"
+    cache_dir: str = "models/hf-cache"
 
 
 @dataclass
 class Task:
-    name: str = "legacy_induction"
-    scoring_version: str = "legacy-induction-token2205-v1"
-    historical_root: str = "."
+    name: str = "induction"
+    scoring_version: str = "induction-repeat-target-logprob-v1"
     examples: int = 4
     pattern_length: int = 8
     seed: int = 42
@@ -97,6 +96,7 @@ class Export:
     inputs: List[str] = field(default_factory=list)
     thresholds: List[float] = field(default_factory=lambda: [.1, .3, .5, .7])
     quantile: float = .95
+    include_activations: bool = False
 
 
 @dataclass
@@ -110,6 +110,8 @@ class Sweep:
     calibration_examples: Optional[int] = None
     skip_incompatible: bool = True
     evict_checkpoint_cache: bool = False
+    # none | cosine16 (keep per-example cosine as float16) | means (keep only mean similarities)
+    compact: str = "none"
 
 
 @dataclass
@@ -125,7 +127,7 @@ class Experiment:
     execution: Execution = field(default_factory=Execution)
     logging: Logging = field(default_factory=Logging)
     sweep: Sweep = field(default_factory=Sweep)
-    input_matrix: str = "ablation_data/step1000.csv"
+    input_matrix: str = "runs/induction-development/similarities.csv"
     output_directory: str = "runs/development"
 
 
@@ -133,8 +135,8 @@ PYTHIA = re.compile(r"EleutherAI/pythia-(14m|31m|70m|160m|410m|1b|1\.4b|2\.8b|6\
 
 
 def validate(config: Experiment):
-    if config.command not in {"inspect", "reference", "analyze", "run", "export", "sweep"}:
-        raise ValueError("command must be inspect, reference, analyze, run, export or sweep")
+    if config.command not in {"inspect", "analyze", "run", "export", "sweep"}:
+        raise ValueError("command must be inspect, analyze, run, export or sweep")
     if config.replacement.name not in {"zero", "mean", "donor"} or config.replacement.estimator != "exact":
         raise ValueError("Replacement must be exact zero, mean or donor")
     if config.replacement.direction not in {"noising", "denoising"} or config.replacement.donor_policy not in {"matched", "resample"}:
@@ -143,7 +145,7 @@ def validate(config: Experiment):
         raise ValueError("mean_reduction must be position (aligned example mean) or global")
     if config.replacement.direction == "denoising" and (config.replacement.name, config.replacement.donor_policy) != ("donor", "matched"):
         raise ValueError("Denoising (clean-to-corrupt recovery) requires matched clean donors")
-    if config.replacement.name == "donor" and config.replacement.donor_policy == "matched" and config.task.name in {"induction", "legacy_induction"}:
+    if config.replacement.name == "donor" and config.replacement.donor_policy == "matched" and config.task.name == "induction":
         raise ValueError("Matched donors require a paired task; use donor_policy=resample for induction")
     if config.replacement.recovery_epsilon <= 0 or config.task.calibration_examples < 0:
         raise ValueError("Invalid calibration/recovery configuration")
@@ -163,21 +165,19 @@ def validate(config: Experiment):
             raise ValueError("Sweep checkpoints must be unique numeric step labels")
         if any(not re.fullmatch(r"[a-z0-9_]+", name) for name in [*sweep.tasks, *sweep.replacements]):
             raise ValueError("Sweep tasks/replacements name YAMLs under configs/task and configs/replacement")
+        if sweep.compact not in {"none", "cosine16", "means"}:
+            raise ValueError("sweep.compact must be none, cosine16 or means")
         if (sweep.examples is not None and sweep.examples < 1) or (sweep.calibration_examples is not None and sweep.calibration_examples < 0):
             raise ValueError("Invalid sweep example counts")
     elif not re.fullmatch(r"[0-9a-f]{40}", config.model.revision) and not (config.command in {"run", "inspect"} and config.model.revision == "resolve"):
         raise ValueError("model.revision must be an immutable 40-character SHA (or resolve, for run/inspect)")
     if not re.fullmatch(r"step\d+", config.model.checkpoint):
         raise ValueError("model.checkpoint must be a numeric step label")
-    versions = {"legacy_induction": "legacy-induction-token2205-v1", "induction": "induction-repeat-target-logprob-v1"}
+    versions = {"induction": "induction-repeat-target-logprob-v1"}
     from .tasks.paper import VERSIONS
     versions.update(VERSIONS)
     if versions.get(config.task.name) != config.task.scoring_version:
         raise ValueError("Unknown task/scoring contract")
-    if config.command == "run" and config.task.name == "legacy_induction":
-        raise ValueError("Fresh execution requires a fresh task, not historical scoring")
-    if config.command == "reference" and (config.task.name != "legacy_induction" or config.scope.resolution != "mixed"):
-        raise ValueError("The optional historical reference requires its legacy task/mixed inventory")
     if config.task.examples < 1 or config.task.pattern_length < 2:
         raise ValueError("Task example count must be positive and induction patterns at least two tokens")
     if config.command not in {"sweep"} and not re.fullmatch(r"[0-9a-f]{40}", config.model.tokenizer_revision) and config.model.tokenizer_revision != "resolve":
@@ -205,9 +205,9 @@ def validate(config: Experiment):
         raise ValueError("examples_per_shard must be a multiple of example_batch_size for exact resume")
     if config.model.architecture not in {"parallel", "sequential"}:
         raise ValueError("Unknown architecture ordering")
-    if config.command in {"reference", "run", "sweep"} and config.model.architecture != "parallel":
+    if config.command in {"run", "sweep"} and config.model.architecture != "parallel":
         raise ValueError("Pythia reference requires parallel blocks")
-    if config.graph.version not in {"influence-v2", "legacy-notebook-v1", "legacy-renderer-v1"}:
+    if config.graph.version != "influence-v2":
         raise ValueError("Unknown graph version")
     if config.graph.resolution not in {"component", "head", "mixed"}:
         raise ValueError("Unknown graph resolution")

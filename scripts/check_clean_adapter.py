@@ -1,7 +1,7 @@
-"""Compare clean source-model and TransformerLens logits on the frozen passage.
+"""Compare clean source-model and TransformerLens logits on a fixed text.
 
-Use the existing environment and local immutable checkpoint cache. This check
-separates conversion errors from unknown historical-run provenance.
+Uses the local immutable checkpoint cache; validates the adapter's weight
+conversion (with and without preprocessing) against the Hugging Face model.
 """
 import argparse
 import hashlib
@@ -10,11 +10,16 @@ from pathlib import Path
 
 from nnets_transformer.observability import Job, Interrupted
 
+TEXT = ("When Mary and John went to the store, John gave a drink to Mary. The war lasted from the year 1732 to "
+        "the year 1745. The keys to the cabinet are on the table, and the author that the guards like writes "
+        "every morning. A B C D E F G H, A B C D E F G H.")
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default="EleutherAI/pythia-14m")
     parser.add_argument("--revision", default="5b020995bfc7aee2931b0f35bd70cf7ee8b1db62")
-    parser.add_argument("--cache-dir", type=Path, default=Path("models/historical-cache"))
+    parser.add_argument("--cache-dir", type=Path, default=Path("models/hf-cache"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--disable-optional-vision", action="store_true")
@@ -23,7 +28,7 @@ def main():
         with Job("clean-adapter-check", artifact_root=args.output.parent) as job:
             if args.output.exists():
                 raise FileExistsError(args.output)
-            snapshot = args.cache_dir / "models--EleutherAI--pythia-14m" / "snapshots" / args.revision
+            snapshot = args.cache_dir / ("models--" + args.model.replace("/", "--")) / "snapshots" / args.revision
             if not (snapshot / "config.json").is_file():
                 raise FileNotFoundError(f"Immutable checkpoint must already be cached: {snapshot}")
             import torch
@@ -32,7 +37,6 @@ def main():
                 import_utils._torchvision_available = False
             from transformers import AutoModelForCausalLM, AutoTokenizer
             from transformer_lens import HookedTransformer
-            from nnets_transformer.execution.historical import historical_text
             job.stage("source_loading", revision=args.revision)
             hf = AutoModelForCausalLM.from_pretrained(snapshot, torch_dtype=torch.float32,
                     attn_implementation="eager").to(args.device).eval()
@@ -40,22 +44,21 @@ def main():
             results = {}
             for processed in (False, True):
                 job.stage("clean_comparison", weight_preprocessing=processed)
-                model = HookedTransformer.from_pretrained("EleutherAI/pythia-14m",
+                model = HookedTransformer.from_pretrained(args.model,
                     tokenizer=tokenizer, revision=args.revision, device=args.device,
                     cache_dir=str(args.cache_dir), fold_ln=processed, center_unembed=False,
                     center_writing_weights=processed)
                 model.eval()
-                tokens = model.to_tokens(historical_text("main.py"))
+                tokens = model.to_tokens(TEXT)
                 with torch.no_grad():
                     logits, loss = model(tokens, return_type="both")
                     reference = hf(tokens, labels=tokens)
                     results[str(processed)] = {
                         "max_absolute_logit_error": (logits-reference.logits).abs().max().item(),
-                        "tl_logit": logits[0, -1, 2205].item(), "hf_logit": reference.logits[0, -1, 2205].item(),
                         "tl_loss": loss.item(), "hf_loss": reference.loss.item(),
                     }
                 job.progress("conditions", len(results), 2)
-            report = {"revision": args.revision, "optional_vision_disabled": args.disable_optional_vision,
+            report = {"model": args.model, "revision": args.revision, "text_sha256": hashlib.sha256(TEXT.encode()).hexdigest(), "optional_vision_disabled": args.disable_optional_vision,
                       "source_config_sha256": hashlib.sha256((snapshot / "config.json").read_bytes()).hexdigest(),
                       "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                       "log_directory": str(job.directory), "logit_atol": 2e-4, "loss_atol": 2e-6,

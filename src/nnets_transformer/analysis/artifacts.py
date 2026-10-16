@@ -6,7 +6,7 @@ from .graphs import Component
 
 
 def read_fresh(matrix_path):
-    """Return verified metadata, or None for an explicitly unmanifested CSV.
+    """Return verified metadata, or None when the CSV has no fresh-run manifest.
 
     A partial intervention sample is preserved as partial graph coverage. This
     reader neither loads model code nor silently completes missing measurements.
