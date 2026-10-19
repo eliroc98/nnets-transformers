@@ -33,6 +33,15 @@ def run(config, resolved_yaml, job, *, adapter=None):
     from nnets_transformer.interventions.references import donors
     from .artifacts import fingerprint
     dataset["donor_manifest"] = donors(examples, config.replacement)
+    excluded = [e.id for e in examples if dataset["donor_manifest"].get(e.id, {}).get("example_id", e.id) is None]
+    if excluded:
+        if len(excluded) == len(examples):
+            raise ValueError("No evaluation example has a length/mask-aligned non-self donor")
+        examples = [e for e in examples if e.id not in excluded]
+        job.event("donor_exclusions", count=len(excluded), example_ids=excluded)
+        # Recorded only when present, so unaffected conditions keep identical evaluation data.
+        dataset["excluded_examples"] = [{"example_id": e, "reason": "no length/mask-aligned non-self donor"} for e in excluded]
+        dataset["evaluated_example_count"] = len(examples)
     from nnets_transformer.interventions.references import convention
     dataset["replacement_convention"] = convention(config.replacement)
     dataset.pop("dataset_sha256")

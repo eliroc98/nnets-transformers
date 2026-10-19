@@ -217,8 +217,32 @@ class PaperTaskContracts(unittest.TestCase):
             self.assertEqual(len(by_id[record["example_id"]].tokens), len(by_id[recipient].tokens))
         self.assertEqual(convention(config)["donor_seed"], 3)
         lonely = [examples[0], replace(examples[1], tokens=examples[1].tokens[:-1], attention_mask=examples[1].attention_mask[:-1])]
-        with self.assertRaisesRegex(ValueError, "No nonself"):
-            donors(lonely, config)
+        plan = donors(lonely, config)
+        self.assertTrue(all(r["example_id"] is None and r["status"] == "excluded_no_aligned_donor" for r in plan.values()))
+        # In a run, an unalignable example is excluded from the resampling condition only, and recorded.
+        model = adapter()
+        examples, _ = get_task("greater_than").prepare(model, task("greater_than", examples=12, calibration=4))
+        lengths = [len(e.tokens) for e in examples]
+        unique = [e.id for e, n in zip(examples, lengths) if lengths.count(n) == 1]
+        self.assertTrue(unique, "fixture needs an example with a unique prompt length")
+        with retained_directory() as tmp:
+            cfg = Experiment(command="run", task=task("greater_than", examples=12, calibration=4), replacement=config,
+                             scope=Scope(resolution="component", components=[ComponentSelection("hook_embed")]),
+                             output_directory=str(Path(tmp) / "run"))
+            with Job("exclusion", root=Path(tmp) / "logs") as job:
+                run(cfg, yaml(cfg), job, adapter=model)
+            dataset = json.loads((Path(tmp) / "run" / "dataset.json").read_text())
+            self.assertEqual([e["example_id"] for e in dataset["excluded_examples"]], unique)
+            self.assertEqual(dataset["evaluated_example_count"], 12-len(unique))
+            measured = {m["example_id"] for m in json.loads((Path(tmp) / "run" / "behavior.json").read_text())["measurements"]}
+            self.assertFalse(measured & set(unique))
+            self.assertEqual(len(measured), 12-len(unique))
+            zero = Experiment(command="run", task=task("greater_than", examples=12, calibration=4), replacement=Replacement(name="zero"),
+                              scope=Scope(resolution="component", components=[ComponentSelection("hook_embed")]),
+                              output_directory=str(Path(tmp) / "zero"))
+            with Job("no-exclusion", root=Path(tmp) / "logs") as job:
+                run(zero, yaml(zero), job, adapter=model)
+            self.assertNotIn("excluded_examples", json.loads((Path(tmp) / "zero" / "dataset.json").read_text()))
 
     def test_unstable_recovery_is_undefined_not_divided(self):
         example = get_task("ioi").prepare(adapter(), task("ioi"))[0][0]

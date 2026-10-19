@@ -41,7 +41,10 @@ def donors(examples, config):
         pool = [other for other in examples if other.id != example.id and other.tokens != example.tokens
                 and len(other.tokens) == len(example.tokens) and other.attention_mask == example.attention_mask]
         if not pool:
-            raise ValueError(f'No nonself, length/mask-aligned donor for {example.id}')
+            # Full-sequence alignment is required; such an example is excluded from this condition only.
+            result[example.id] = {'example_id': None, 'condition': 'clean', 'alignment': 'identity-all-positions',
+                                  'status': 'excluded_no_aligned_donor'}
+            continue
         donor = rng.choice(pool)
         result[example.id] = {'example_id': donor.id, 'condition': 'clean', 'alignment': 'identity-all-positions'}
     return result

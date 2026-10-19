@@ -114,8 +114,19 @@ def run_sweep(config, config_dir, job):
             if completed(cell):
                 compact(cell.output_directory, sweep.compact, job)
     processed = 0
+    failures = []
+    # Completed cells must agree with the evaluation data recorded for their condition.
+    for index, (key, cell) in enumerate(planned):
+        condition = f"{key['task']}/{key['replacement']}"
+        if completed(cell) and fingerprints.setdefault(condition, evaluation_fingerprint(cell.output_directory)) != \
+                evaluation_fingerprint(cell.output_directory):
+            state["cells"][index]["state"] = "inconsistent"
+            failures.append({**key, "error": "completed cell's evaluation data differs from its condition's other checkpoints"})
+    state["fixed_evaluation_data"] = fingerprints
+    atomic_json(manifest_path, state)
     for checkpoint in sweep.checkpoints:
-        todo = [(i, key, cell) for i, (key, cell) in enumerate(planned) if key["checkpoint"] == checkpoint and not completed(cell)]
+        todo = [(i, key, cell) for i, (key, cell) in enumerate(planned) if key["checkpoint"] == checkpoint and not completed(cell)
+                and state["cells"][i]["state"] != "inconsistent"]
         if not todo:
             continue
         from nnets_transformer.models import load_adapter
@@ -128,15 +139,21 @@ def run_sweep(config, config_dir, job):
                 job.stage("sweep_cell", **key)
                 try:
                     run(cell, yaml, job, adapter=adapter)
+                    condition = f"{key['task']}/{key['replacement']}"
+                    current = evaluation_fingerprint(cell.output_directory)
+                    if fingerprints.setdefault(condition, current) != current:
+                        raise ValueError(f"Evaluation data changed across checkpoints for {condition}")
+                    if sweep.compact != "none":
+                        compact(cell.output_directory, sweep.compact, job)
+                except Exception as exc:  # one failing condition must not discard the rest of the grid
+                    failures.append({**key, "error": f"{type(exc).__name__}: {exc}"})
+                    state["cells"][index].update(state="failed", error=failures[-1]["error"])
+                    atomic_json(manifest_path, state)
+                    job.event("sweep_cell_failed", severity="ERROR", **failures[-1])
+                    continue
                 finally:
                     # Cells set their own resume command; the sweep's command resumes everything.
                     job.resume_command = sweep_resume
-                condition = f"{key['task']}/{key['replacement']}"
-                current = evaluation_fingerprint(cell.output_directory)
-                if fingerprints.setdefault(condition, current) != current:
-                    raise ValueError(f"Evaluation data changed across checkpoints for {condition}")
-                if sweep.compact != "none":
-                    compact(cell.output_directory, sweep.compact, job)
                 state["cells"][index]["state"] = "completed"
                 state["fixed_evaluation_data"] = fingerprints
                 atomic_json(manifest_path, state)
@@ -154,5 +171,8 @@ def run_sweep(config, config_dir, job):
             evict(config.model.cache_dir, [revisions[checkpoint]], job)
     job.resume_command = sweep_resume
     job.event("sweep_summary", cells=total, completed_now=processed, previously_completed=done, skipped=len(skipped),
-              manifest=str(manifest_path.resolve()))
+              failed=len(failures), manifest=str(manifest_path.resolve()))
     job.artifact(manifest_path)
+    if failures:
+        listed = "; ".join(f"{f['checkpoint']}/{f['task']}/{f['replacement']}: {f['error']}" for f in failures[:5])
+        raise RuntimeError(f"{len(failures)} sweep cell(s) failed (see sweep.json); others completed. {listed}")

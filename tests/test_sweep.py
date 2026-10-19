@@ -66,6 +66,40 @@ class SweepContracts(unittest.TestCase):
             self.assertEqual(loads, [])
             self.assertEqual(len(json.loads((root / "sweep" / "pythia-14m" / "sweep.json").read_text())["attempts"]), 2)
 
+    def test_failed_cell_is_recorded_and_others_continue(self):
+        with retained_directory() as tmp:
+            root = Path(tmp)
+            config = self.configure(root, "sweep.replacements=[zero,mean]")
+            from nnets_transformer.execution import sweep as module
+            original, runner = module._load, None
+            def small(schema, path, overrides=None):
+                value = original(schema, path, overrides)
+                if hasattr(value, "pattern_length"):
+                    value.pattern_length = 4
+                return value
+            import nnets_transformer.execution.runner as runner_module
+            real_run = runner_module.run
+            def flaky(cell, yaml, job, adapter=None):
+                if cell.replacement.name == "mean" and cell.model.checkpoint == "step0":
+                    raise ValueError("deliberate cell failure")
+                return real_run(cell, yaml, job, adapter=adapter)
+            with patch("nnets_transformer.models.checkpoints.resolve_revisions", lambda m, c: {k: REVISIONS[k] for k in c}), \
+                 patch("nnets_transformer.models.load_adapter", lambda *a: tiny()), patch.object(module, "_load", small), \
+                 patch.object(runner_module, "run", flaky), Job("flaky", root=root / "logs") as job, \
+                 self.assertRaisesRegex(RuntimeError, "1 sweep cell"):
+                run_sweep(config, "configs", job)
+            states = {(c["checkpoint"], c["replacement"]): c["state"]
+                      for c in json.loads((root / "sweep" / "pythia-14m" / "sweep.json").read_text())["cells"]}
+            self.assertEqual(states, {("step0", "zero"): "completed", ("step0", "mean"): "failed",
+                                      ("step8", "zero"): "completed", ("step8", "mean"): "completed"})
+            # A rerun retries only the failed cell.
+            config.execution.resume = True
+            with patch("nnets_transformer.models.load_adapter", lambda *a: tiny()), patch.object(module, "_load", small), \
+                 Job("retry", root=root / "logs") as job:
+                run_sweep(config, "configs", job)
+            states = {c["state"] for c in json.loads((root / "sweep" / "pythia-14m" / "sweep.json").read_text())["cells"]}
+            self.assertEqual(states, {"completed"})
+
     def test_incompatible_cells_can_be_rejected_early(self):
         with retained_directory() as tmp:
             config = self.configure(Path(tmp), "sweep.skip_incompatible=false")
