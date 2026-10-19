@@ -108,8 +108,10 @@ def load(config, resources, job):
     from transformers import AutoTokenizer
     from transformer_lens import HookedTransformer
     job.stage("checkpoint_loading", model=config.id, checkpoint=config.checkpoint, revision=config.revision)
+    from .checkpoints import download_patterns
+    # Exactly the weight format the loader uses (also what a sweep prefetches), so no redundant download.
     model_path = Path(snapshot_download(config.id, revision=config.revision, cache_dir=config.cache_dir,
-        allow_patterns=["*.json", "*.txt", "*.safetensors", "pytorch_model.bin"]))
+        allow_patterns=download_patterns(config.id, config.revision), max_workers=8))
     tokenizer_path = model_path if config.tokenizer_revision == config.revision else Path(snapshot_download(
         config.id, revision=config.tokenizer_revision, cache_dir=config.cache_dir, allow_patterns=["*.json", "*.txt"]))
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)

@@ -69,6 +69,26 @@ def evaluation_fingerprint(output):
     return fingerprint(dataset)
 
 
+class _Download:
+    """One background checkpoint download (daemon thread: never delays an interrupted exit)."""
+    def __init__(self, function, *args):
+        import threading
+        self.result, self.error = None, None
+        def target():
+            try:
+                self.result = function(*args)
+            except Exception as exc:  # reported when awaited; the loader then downloads normally
+                self.error = exc
+        self.thread = threading.Thread(target=target, name="prefetch", daemon=True)
+        self.thread.start()
+
+    def wait(self):
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
 def run_sweep(config, config_dir, job):
     from .runner import run
     from nnets_transformer.models.checkpoints import resolve_revisions, evict
@@ -124,9 +144,29 @@ def run_sweep(config, config_dir, job):
             failures.append({**key, "error": "completed cell's evaluation data differs from its condition's other checkpoints"})
     state["fixed_evaluation_data"] = fingerprints
     atomic_json(manifest_path, state)
-    for checkpoint in sweep.checkpoints:
-        todo = [(i, key, cell) for i, (key, cell) in enumerate(planned) if key["checkpoint"] == checkpoint and not completed(cell)
+    def remaining(checkpoint):
+        return [(i, key, cell) for i, (key, cell) in enumerate(planned) if key["checkpoint"] == checkpoint and not completed(cell)
                 and state["cells"][i]["state"] != "inconsistent"]
+    work = [c for c in sweep.checkpoints if remaining(c)]
+    downloads = {}
+    def schedule(position):
+        # Download the next checkpoint while this one computes; downloads then cost no GPU time.
+        if sweep.prefetch and position < len(work) and work[position] not in downloads:
+            from nnets_transformer.models.checkpoints import prefetch
+            downloads[work[position]] = _Download(prefetch, config.model.id, revisions[work[position]], config.model.cache_dir)
+    schedule(0)
+    import time
+    for position, checkpoint in enumerate(work):
+        todo = remaining(checkpoint)
+        if checkpoint in downloads:
+            started = time.perf_counter()
+            try:
+                seconds = downloads.pop(checkpoint).wait()
+                job.event("prefetch_ready", checkpoint=checkpoint, download_seconds=seconds,
+                          waited_seconds=time.perf_counter()-started)
+            except Exception as exc:
+                job.event("prefetch_failed", severity="WARNING", checkpoint=checkpoint, error=str(exc))
+        schedule(position+1)
         if not todo:
             continue
         from nnets_transformer.models import load_adapter

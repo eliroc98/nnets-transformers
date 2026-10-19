@@ -19,7 +19,8 @@ class SweepContracts(unittest.TestCase):
             "sweep.checkpoints=[step0,step8]", "sweep.tasks=[induction]",
             "sweep.replacements=[zero,mean,donor,donor_resample]", "sweep.examples=3", "sweep.calibration_examples=2",
             "task.pattern_length=4", f"sweep.output_root={root}/sweep", "execution.backend=optimized",
-            "execution.example_batch_size=1", "execution.examples_per_shard=1", "sweep.compact=cosine16", *extra])
+            "execution.example_batch_size=1", "execution.examples_per_shard=1", "sweep.compact=cosine16",
+            "sweep.prefetch=false", *extra])
         return config
 
     def test_checkpoint_grouping_skips_and_resume(self):
@@ -99,6 +100,38 @@ class SweepContracts(unittest.TestCase):
                 run_sweep(config, "configs", job)
             states = {c["state"] for c in json.loads((root / "sweep" / "pythia-14m" / "sweep.json").read_text())["cells"]}
             self.assertEqual(states, {"completed"})
+
+    def test_next_checkpoint_downloads_before_current_is_loaded(self):
+        with retained_directory() as tmp:
+            root = Path(tmp)
+            config = self.configure(root, "sweep.replacements=[zero]", "sweep.prefetch=true")
+            from nnets_transformer.execution import sweep as module
+            original = module._load
+            def small(schema, path, overrides=None):
+                value = original(schema, path, overrides)
+                if hasattr(value, "pattern_length"):
+                    value.pattern_length = 4
+                return value
+            calls = []
+            def prefetch(model_id, revision, cache_dir):
+                calls.append(("download", revision))
+                if revision == REVISIONS["step8"]:
+                    raise OSError("simulated network failure")
+                return 0.0
+            def load_adapter(model, resources, job):
+                calls.append(("load", model.revision))
+                return tiny()
+            with patch("nnets_transformer.models.checkpoints.resolve_revisions", lambda m, c: {k: REVISIONS[k] for k in c}), \
+                 patch("nnets_transformer.models.checkpoints.prefetch", prefetch), \
+                 patch("nnets_transformer.models.load_adapter", load_adapter), patch.object(module, "_load", small), \
+                 Job("prefetch", root=root / "logs") as job:
+                run_sweep(config, "configs", job)
+            # step8's download is started before step0 is loaded; its failure only falls back to a normal load.
+            self.assertLess(calls.index(("download", REVISIONS["step8"])), calls.index(("load", REVISIONS["step0"])))
+            self.assertEqual([c for c in calls if c[0] == "load"], [("load", REVISIONS["step0"]), ("load", REVISIONS["step8"])])
+            events = [json.loads(line) for line in (job.directory / "events.jsonl").read_text().splitlines()]
+            self.assertTrue(any(e["event"] == "prefetch_failed" for e in events))
+            self.assertTrue(all(c["state"] == "completed" for c in json.loads((root / "sweep" / "pythia-14m" / "sweep.json").read_text())["cells"]))
 
     def test_incompatible_cells_can_be_rejected_early(self):
         with retained_directory() as tmp:

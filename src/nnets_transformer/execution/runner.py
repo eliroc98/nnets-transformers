@@ -73,8 +73,10 @@ def run(config, resolved_yaml, job, *, adapter=None):
         "python": sys.version, "dependencies": {name: importlib.metadata.version(name) for name in
             ("torch", "transformer-lens", "transformers")}, "activation_metric_version": ACTIVATION_VERSION,
         "scoring_version": dataset["scoring_version"], "estimator": "exact", "execution_backend": config.execution.backend}
+    from .artifacts import FIELDS
+    computed = ["cosine_similarity"] if config.execution.activation_metrics == "cosine" else list(FIELDS)
     store = Artifacts(output, identity, resolved_yaml, dataset, inventory, planned,
-                      job, resume=config.execution.resume)
+                      job, resume=config.execution.resume, computed_fields=computed)
     import shlex
     job.resume_command = shlex.join(["poetry", "run", "nnets-transformer", "--config-dir", str(output.resolve()),
                                     "--config-name", "resolved", "execution.resume=true",

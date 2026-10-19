@@ -76,6 +76,8 @@ class Execution:
     example_batch_size: int = 4
     intervention_batch_size: int = 4
     examples_per_shard: int = 4
+    # full: cosine, relative L2 and zero-norm fractions; cosine: cosine only (optimized backend; faster)
+    activation_metrics: str = "full"
 
 
 @dataclass
@@ -112,6 +114,8 @@ class Sweep:
     evict_checkpoint_cache: bool = False
     # none | cosine16 (keep per-example cosine as float16) | means (keep only mean similarities)
     compact: str = "none"
+    # download the next checkpoint in the background while the current one computes
+    prefetch: bool = True
 
 
 @dataclass
@@ -201,6 +205,10 @@ def validate(config: Experiment):
         raise ValueError("Supported precision: float32 or bfloat16 with FP32 metric reductions")
     if config.execution.backend not in {"serial", "optimized"} or min(config.execution.example_batch_size, config.execution.intervention_batch_size, config.execution.examples_per_shard) < 1:
         raise ValueError("Invalid execution backend or batch sizes")
+    if config.execution.activation_metrics not in {"full", "cosine"}:
+        raise ValueError("execution.activation_metrics must be full or cosine")
+    if config.execution.activation_metrics == "cosine" and config.execution.backend != "optimized":
+        raise ValueError("Cosine-only activation metrics require execution.backend=optimized")
     if config.execution.backend == "optimized" and config.execution.examples_per_shard % config.execution.example_batch_size:
         raise ValueError("examples_per_shard must be a multiple of example_batch_size for exact resume")
     if config.model.architecture not in {"parallel", "sequential"}:

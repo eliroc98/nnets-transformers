@@ -35,6 +35,12 @@ def write_chunk(path, records, observation_ids):
     values = np.full((len(records), len(observation_ids), len(FIELDS)), np.nan, dtype=np.float32)
     meta = []
     for row, record in enumerate(records):
+        if isinstance(record["activations"], np.ndarray):  # already [observations, fields] in inventory order
+            if record["activations"].shape != (len(observation_ids), len(FIELDS)):
+                raise ValueError("Activation array does not match the saved inventory")
+            values[row] = record["activations"]
+            meta.append({k: v for k, v in record.items() if k != "activations"})
+            continue
         if [a["observation_id"] for a in record["activations"]] != observation_ids:
             raise ValueError("Activation observations differ from the saved inventory order")
         for column, activation in enumerate(record["activations"]):
@@ -61,16 +67,18 @@ def read_chunk(path):
     return meta, values
 
 
-def expand(meta, values, observation_ids):
+def expand(meta, values, observation_ids, computed=FIELDS):
     """Reconstruct v1-shaped per-record dictionaries for compatibility readers."""
+    full = "relative_l2_change" in computed
     for record, rows in zip(meta, values):
         activations = []
         for observation, (cosine, relative, clean_zero, patched_zero) in zip(observation_ids, rows.tolist()):
             valid = not math.isnan(relative)
             activations.append({"observation_id": observation, "cosine_similarity": cosine,
                 "relative_l2_change": relative if valid else None,
-                "relative_l2_status": "valid" if valid else "undefined_clean_zero_norm",
-                "clean_zero_norm_fraction": clean_zero, "patched_zero_norm_fraction": patched_zero})
+                "relative_l2_status": ("valid" if valid else "undefined_clean_zero_norm") if full else "not_computed",
+                "clean_zero_norm_fraction": clean_zero if full else None,
+                "patched_zero_norm_fraction": patched_zero if full else None})
         yield {**record, "activations": activations}
 
 
@@ -93,12 +101,13 @@ def iter_records(root, manifest):
         if observation_ids is None:
             observation_ids = [o["hook"] if o["head"] is None else f"{o['hook']}.{o['head']}"
                                for o in json.loads((root / "inventory.json").read_text())["observations"]]
-        yield from expand(*read_chunk(path), observation_ids)
+        yield from expand(*read_chunk(path), observation_ids, manifest["shard_format"].get("computed_fields", FIELDS))
 
 
 class Artifacts:
-    def __init__(self, root, identity, resolved_yaml, dataset, inventory, planned, job, resume=False):
+    def __init__(self, root, identity, resolved_yaml, dataset, inventory, planned, job, resume=False, computed_fields=FIELDS):
         """planned maps chunk IDs to their ordered work keys."""
+        self.computed_fields = list(computed_fields)
         self.root, self.job = Path(root), job
         self.planned = planned
         self.observation_ids = [o["hook"] if o["head"] is None else f"{o['hook']}.{o['head']}" for o in inventory["observations"]]
@@ -141,6 +150,7 @@ class Artifacts:
                     "resolved_config": "resolved.yaml", "similarities": "similarities.csv", "behavior": "behavior.json"},
                     "shard_format": {"container": "zip", "records": "records.json", "activations": "activations.npy",
                                      "activation_axes": ["record", "observation", "field"], "fields": list(FIELDS),
+                                     "computed_fields": self.computed_fields,
                                      "missing": "NaN relative_l2_change marks an undefined clean zero norm"}}
             previous = self.manifest["attempts"][-1] if self.manifest["attempts"] else None
             job.previous_attempt = previous
@@ -185,7 +195,7 @@ class Artifacts:
 
     def records(self):
         meta, values = self.arrays()
-        return list(expand(meta, values, self.observation_ids))
+        return list(expand(meta, values, self.observation_ids, self.manifest["shard_format"].get("computed_fields", FIELDS)))
 
     def close(self):
         self.lock.close()
@@ -264,8 +274,9 @@ def compact(root, mode, job=None):
     outputs = {"similarities.csv": manifest["output_hashes"]["similarities.csv"], "behavior.json": digest(root / "behavior.json"),
                "behavior_measurements.parquet": digest(root / "behavior_measurements.parquet")}
     record = {"version": COMPACTION, "mode": mode, "removed_shards": {k: s["sha256"] for k, s in manifest["shards"].items()},
-              "removed_fields": ["relative_l2_change", "clean_zero_norm_fraction", "patched_zero_norm_fraction"] +
+              "removed_fields": [f for f in manifest["shard_format"].get("computed_fields", FIELDS) if f != "cosine_similarity"] +
                                 (["cosine_similarity (per example)"] if mode == "means" else []),
+              "computed_fields": manifest["shard_format"].get("computed_fields", list(FIELDS)),
               "original_dataset_json_sha256": manifest["inputs"]["dataset.json"],
               "original_behavior_json_sha256": manifest["output_hashes"]["behavior.json"]}
     if mode == "cosine16":

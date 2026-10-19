@@ -60,3 +60,24 @@ def compare_batch(clean_cache, patched_cache, observations, components, masks, i
               "clean_zero_norm_fraction": clean_zero, "patched_zero_norm_fraction": patched_zero}
              for selection, (cosine, numerator, denominator, clean_zero, patched_zero) in zip(observations, row)]
             for row in values]
+
+
+def cosine_batch(clean_cache, patched_cache, observations, components, masks, indices):
+    """Cosine-only reduction, same definition as compare_batch's cosine: one feature-axis cosine
+    map per hook (shared by its head observations), masked mean over valid positions (and heads).
+    Returns a [slices, observations] float32 numpy array."""
+    maps, values = {}, []
+    for selection in observations:
+        if selection.hook not in maps:
+            clean = clean_cache[selection.hook].index_select(0, indices).float()
+            maps[selection.hook] = F.cosine_similarity(clean, patched_cache[selection.hook].float(), dim=-1)
+        cosine = maps[selection.hook]
+        if selection.head is not None:
+            cosine = cosine.select(components[selection.hook].head_axis, selection.head)
+        valid = masks
+        while valid.ndim < cosine.ndim:
+            valid = valid.unsqueeze(-1)
+        valid = valid.expand(cosine.shape)
+        axes = tuple(range(1, cosine.ndim))
+        values.append((cosine*valid).sum(axes)/valid.sum(axes).clamp_min(1))
+    return torch.stack(values, 1).cpu().numpy()

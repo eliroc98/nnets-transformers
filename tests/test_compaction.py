@@ -80,6 +80,36 @@ class CompactionContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Compacted run"):
                 list(iter_records(copy, json.loads((copy / "manifest.json").read_text())))
 
+    def test_cosine_only_runs_label_uncomputed_fields(self):
+        with retained_directory() as tmp:
+            root = Path(tmp)
+            cfg = config(root / "cosine")
+            cfg.scope.components = []
+            cfg.execution.backend = "optimized"
+            cfg.execution.activation_metrics = "cosine"
+            with Job("cosine-run", root=root / "logs") as job:
+                run(cfg, yaml(cfg), job, adapter=tiny())
+            reference = config(root / "full")
+            reference.scope.components = []
+            reference.execution.backend = "optimized"
+            with Job("full-run", root=root / "logs") as job:
+                run(reference, yaml(reference), job, adapter=tiny())
+            fast_root, full_root = Path(cfg.output_directory), Path(reference.output_directory)
+            fast_manifest = json.loads((fast_root / "manifest.json").read_text())
+            self.assertEqual(fast_manifest["shard_format"]["computed_fields"], ["cosine_similarity"])
+            fast = list(iter_records(fast_root, fast_manifest))
+            full = list(iter_records(full_root, json.loads((full_root / "manifest.json").read_text())))
+            for a, b in zip(fast, full):
+                for x, y in zip(a["activations"], b["activations"]):
+                    self.assertAlmostEqual(x["cosine_similarity"], y["cosine_similarity"], places=6)
+                    self.assertEqual(x["relative_l2_status"], "not_computed")
+                    self.assertIsNone(x["relative_l2_change"])
+            a = pd.read_csv(fast_root / "similarities.csv", index_col=0)
+            b = pd.read_csv(full_root / "similarities.csv", index_col=0)
+            pd.testing.assert_frame_equal(a, b, atol=1e-6)
+            record = compact(fast_root, "cosine16")
+            self.assertEqual(record["removed_fields"], [])
+
     def test_means_mode_and_refusals(self):
         with retained_directory() as tmp:
             root = Path(tmp)

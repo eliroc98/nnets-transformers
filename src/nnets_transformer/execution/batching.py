@@ -41,7 +41,18 @@ def records(work, pending, adapter, observations, replacement, dataset, executio
             masks = torch.zeros((len(batch), length), device=logits.device, dtype=torch.bool)
             for index, example in enumerate(batch_examples):
                 masks[index, :len(example.tokens)] = torch.as_tensor(example.attention_mask, device=logits.device)
-            activations = compare_batch(clean_cache, patched_cache, observations, adapter.components, masks, indices)
+            if getattr(execution, "activation_metrics", "full") == "cosine":
+                import numpy as np
+                from nnets_transformer.metrics.activation import cosine_batch
+                cosines = cosine_batch(clean_cache, patched_cache, observations, adapter.components, masks, indices)
+                # [observations, fields] with only cosine computed; other fields are marked not computed.
+                activations = []
+                for row in cosines:
+                    array = np.full((len(observations), 4), np.nan, dtype=np.float32)
+                    array[:, 0] = row
+                    activations.append(array)
+            else:
+                activations = compare_batch(clean_cache, patched_cache, observations, adapter.components, masks, indices)
             for (key, example, selection), patched, activation in zip(batch, patched_scores, activations):
                 clean = clean_scores[position[example.id]]
                 from nnets_transformer.interventions.references import behavior

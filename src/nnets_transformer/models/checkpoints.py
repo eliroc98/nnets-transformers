@@ -21,3 +21,25 @@ def evict(cache_dir, revisions, job):
     strategy = info.delete_revisions(*revisions)
     job.event("checkpoint_cache_evicted", revisions=list(revisions), freed_bytes=strategy.expected_freed_size)
     strategy.execute()
+
+
+def download_patterns(model_id, revision):
+    """Config/tokenizer files plus one weight format: safetensors when present (what the loader
+    uses), otherwise the PyTorch .bin files (single file or shards)."""
+    from huggingface_hub import HfApi
+    files = [s.rfilename for s in HfApi().model_info(model_id, revision=revision).siblings]
+    safetensors = [f for f in files if f.endswith(".safetensors")]
+    weights = safetensors or [f for f in files if f.endswith(".bin")]
+    if not weights:
+        raise ValueError(f"{model_id}@{revision} has no weight files")
+    return ["*.json", "*.txt", *weights]
+
+
+def prefetch(model_id, revision, cache_dir, workers=8):
+    """Download one checkpoint into the shared cache (safe to run while another checkpoint computes)."""
+    import time
+    from huggingface_hub import snapshot_download
+    started = time.perf_counter()
+    snapshot_download(model_id, revision=revision, cache_dir=cache_dir,
+                      allow_patterns=download_patterns(model_id, revision), max_workers=workers)
+    return time.perf_counter() - started

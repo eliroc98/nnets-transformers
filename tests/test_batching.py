@@ -42,6 +42,29 @@ class BatchingContracts(unittest.TestCase):
         baseline, _ = adapter.forward(examples[0], observations)
         torch.testing.assert_close(logits[0, :len(examples[0].tokens)], baseline[0], atol=2e-6, rtol=2e-6)
 
+    def test_cosine_only_metrics_match_full_metrics(self):
+        import numpy as np
+        adapter = tiny()
+        cfg = config(Path('unused'))
+        cfg.task.examples = 3
+        examples, dataset = Induction().prepare(adapter, cfg.task)
+        shorter, _ = Induction().prepare(adapter, replace(cfg.task, pattern_length=3))
+        examples[1] = replace(shorter[1], id=examples[1].id)   # right padding exercised
+        for resolution in ('component', 'head'):
+            observations = adapter.selections(resolution)
+            sources = observations[:6]
+            work = [(f'{e}-{i}', example, s) for e, example in enumerate(examples) for i, s in enumerate(sources)]
+            full = {k: r for k, _, r in records(work, {w[0] for w in work}, adapter, observations, Zero(), dataset, cfg.execution)}
+            cosine_execution = replace(cfg.execution, activation_metrics='cosine')
+            fast = {k: r for k, _, r in records(work, {w[0] for w in work}, adapter, observations, Zero(), dataset, cosine_execution)}
+            for key, record in full.items():
+                expected = np.array([a['cosine_similarity'] for a in record['activations']], dtype=np.float32)
+                array = fast[key]['activations']
+                self.assertEqual(array.shape, (len(observations), 4))
+                np.testing.assert_allclose(array[:, 0], expected, atol=1e-6)
+                self.assertTrue(np.isnan(array[:, 1:]).all())
+                self.assertEqual(fast[key]['behavior'], record['behavior'])
+
     def test_pending_only_and_hook_cleanup_on_error(self):
         adapter = tiny()
         cfg = config(Path('unused'))

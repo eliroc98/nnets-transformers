@@ -16,6 +16,7 @@ execution:
   example_batch_size: 4
   intervention_batch_size: 4
   examples_per_shard: 4
+  activation_metrics: full
 sweep:
   checkpoints: []
   tasks: []
@@ -26,6 +27,7 @@ sweep:
   skip_incompatible: true
   evict_checkpoint_cache: false
   compact: none
+  prefetch: true
 logging:
   root: logs
   rotation_bytes: 10485760
