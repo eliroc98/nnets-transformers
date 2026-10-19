@@ -23,7 +23,9 @@ class LoggingContracts(unittest.TestCase):
                 "--", sys.executable, "-u", "-c", code]
 
     def attempt(self, name):
-        return max((ROOT / "logs" / name).iterdir(), key=lambda p: p.stat().st_mtime_ns)
+        # Distributed filesystems can give two attempt directories identical mtimes.
+        return max((ROOT / "logs" / name).iterdir(),
+                   key=lambda p: json.loads((p / "status.json").read_text())["started_at"])
 
     def records(self, attempt):
         return [json.loads(line) for line in (attempt / "events.jsonl").read_text().splitlines()]

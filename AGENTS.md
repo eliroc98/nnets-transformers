@@ -14,18 +14,15 @@ Use the implementation TODO checklist and session handoff notes in [the expansio
 
 **Required Python environment and dependency management**
 
-Use only the existing pyenv environment `nnets-transformer` at `/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer` (Python 3.11.1) for this project. Manage dependencies with Poetry and the project `pyproject.toml`/lockfile. Reuse this environment for implementation, tests, notebooks, experiments, and the dashboard.
+Use the cluster Python module `python/3.11.0-gcc-13.1.0-qtdpw7v` and the project-storage environment `$PROJECT_DIR/.venv` (Python 3.11.0). The user approved this migration from the unavailable serubu03 pyenv on 19 October 2026. Manage experiment dependencies with Poetry and the existing `pyproject.toml`/`poetry.lock`; do not refresh the lockfile incidentally.
 
-Before invoking Python or Poetry in a new shell/tool process:
+Before invoking Python or Poetry in each new shell/tool process, run from the repository root:
 
 ```bash
-export PYENV_VERSION=nnets-transformer
-export VIRTUAL_ENV=/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer
-export PATH="$VIRTUAL_ENV/bin:$PATH"
-export POETRY_VIRTUALENVS_CREATE=false
+source scripts/cluster_env.sh
 ```
 
-These exports do not persist between separate tool processes. The environment's bundled activation script contains a stale `VIRTUAL_ENV` path; use the explicit exports above rather than sourcing it or editing the shared environment. Verify that `poetry config virtualenvs.create` reports `false` and that `poetry run python` has `sys.prefix` resolving to the required path before any dependency installation/change. The repository's `.python-version` and project-local `poetry.toml` record this setup; keep virtualenv creation disabled. Do not create a `.venv`, a Poetry-managed environment, or another pyenv/Conda environment, and do not substitute system Python. If the specified environment is unavailable, report that concrete blocker rather than creating a replacement. Poetry itself may run from its existing external installation.
+This loads the module, selects the existing project virtualenv, disables Poetry virtualenv creation, and puts HF/Poetry/pip caches on project storage. On first setup only, create it with the module Python (`python -m venv "$VIRTUAL_ENV"`) after sourcing the script. Reuse this environment for implementation, tests, notebooks, experiments, and the dashboard. Do not create other experiment environments or substitute system Python. Verify `poetry config virtualenvs.create` reports `false` and `poetry run python` has `sys.prefix` resolving to `$PROJECT_DIR/.venv` before dependency changes. Install from the lockfile with `poetry install --with dashboard,dashboard-test`. Keep the explicit activation and project-local `poetry.toml`; `.python-version` records 3.11.0 for tooling and does not replace module loading.
 
 **Research objective and current state**
 
@@ -89,7 +86,7 @@ Clear notebook outputs/execution counts before committing while preserving code/
 
 **Working practices and validation**
 
-Use the required `nnets-transformer` pyenv environment through Poetry and the existing lockfile for reproducible fresh runs; avoid incidental dependency upgrades. The deterministic suite is `poetry run python -u -m unittest discover -s tests -v`; no lint command is configured. Add meaningful validation when introducing scientific or execution logic. Historical equality is not a test oracle for the improved pipeline.
+Use the required cluster project environment through Poetry and the existing lockfile for reproducible fresh runs; avoid incidental dependency upgrades. The deterministic suite is `poetry run python -u -m unittest discover -s tests -v`; no lint command is configured. Add meaningful validation when introducing scientific or execution logic. Historical equality is not a test oracle for the improved pipeline.
 
 For implementation changes, start with small deterministic cases. Check no-op identity, replacement tensors, masks, hook cleanup, serial/batched equivalence, precision tolerances, and resume behavior as applicable. Validate a new model adapter against source-model clean logits and intervention semantics.
 

@@ -91,8 +91,10 @@ class _Download:
 
 def run_sweep(config, config_dir, job):
     from .runner import run
+    from nnets_transformer.tasks.prepared import PreparedTasks
     from nnets_transformer.models.checkpoints import resolve_revisions, evict
     sweep = config.sweep
+    prepared_tasks = PreparedTasks()
     root = Path(sweep.output_root)
     job.stage("checkpoint_resolution", model=config.model.id, checkpoints=len(sweep.checkpoints))
     # One manifest per model: several models may share an output root.
@@ -178,7 +180,7 @@ def run_sweep(config, config_dir, job):
                 yaml = OmegaConf.to_yaml(OmegaConf.structured(cell))
                 job.stage("sweep_cell", **key)
                 try:
-                    run(cell, yaml, job, adapter=adapter)
+                    run(cell, yaml, job, adapter=adapter, prepared_tasks=prepared_tasks)
                     condition = f"{key['task']}/{key['replacement']}"
                     current = evaluation_fingerprint(cell.output_directory)
                     if fingerprints.setdefault(condition, current) != current:

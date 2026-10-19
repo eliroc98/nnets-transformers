@@ -80,10 +80,10 @@ class SweepContracts(unittest.TestCase):
                 return value
             import nnets_transformer.execution.runner as runner_module
             real_run = runner_module.run
-            def flaky(cell, yaml, job, adapter=None):
+            def flaky(cell, yaml, job, adapter=None, prepared_tasks=None):
                 if cell.replacement.name == "mean" and cell.model.checkpoint == "step0":
                     raise ValueError("deliberate cell failure")
-                return real_run(cell, yaml, job, adapter=adapter)
+                return real_run(cell, yaml, job, adapter=adapter, prepared_tasks=prepared_tasks)
             with patch("nnets_transformer.models.checkpoints.resolve_revisions", lambda m, c: {k: REVISIONS[k] for k in c}), \
                  patch("nnets_transformer.models.load_adapter", lambda *a: tiny()), patch.object(module, "_load", small), \
                  patch.object(runner_module, "run", flaky), Job("flaky", root=root / "logs") as job, \

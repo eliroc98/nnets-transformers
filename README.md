@@ -22,62 +22,50 @@ The installable package provides independent adapter/task/replacement/metric/exe
 
 **Setup**
 
-Use the existing pyenv environment **`nnets-transformer`**, located at:
-
-```text
-/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer
-```
-
-Activate it in every new shell before using Poetry:
+On the Slurm cluster, load the Python 3.11.0 module and select the project-storage environment in every new shell:
 
 ```bash
-export PYENV_VERSION=nnets-transformer
-export VIRTUAL_ENV=/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer
-export PATH="$VIRTUAL_ENV/bin:$PATH"
-export POETRY_VIRTUALENVS_CREATE=false
+source scripts/cluster_env.sh
 ```
 
-The repository's `.python-version` selects that pyenv name. Project-local [poetry.toml](poetry.toml) disables virtualenv creation and in-project environments. The explicit `VIRTUAL_ENV`/`PATH` settings select the existing environment for Poetry, including in noninteractive sessions; environment settings do not persist between separate shell/tool processes. The environment's bundled activation script currently contains a stale path, so use the exports above rather than sourcing that script. Poetry itself can remain installed outside this environment.
+The script sets `PROJECT_DIR` to the repository's physical location (currently `/exa/projects/TasCN/nnets-transformer`), `VIRTUAL_ENV=$PROJECT_DIR/.venv`, `POETRY_VIRTUALENVS_CREATE=false`, and `HF_HOME=$PROJECT_DIR/.cache/huggingface`. Poetry and pip caches also stay under project storage. Model YAMLs use `models/hf-cache`, relative to this project-storage checkout. Keep outputs here as well. The user approved replacing the serubu03-only pyenv rules on 19 October 2026.
 
-Verify the setting and the interpreter before installing or changing dependencies:
+First setup only, after sourcing the script:
 
 ```bash
+python -m venv "$VIRTUAL_ENV"
+python -m pip install poetry==2.2.1 virtualenv==20.34.0 anyio==4.10.0
 poetry config virtualenvs.create
-poetry run python -c 'import sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path("/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer").resolve(), sys.prefix; print(sys.executable); print(sys.prefix)'
+poetry run -- python -c 'import os, sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(os.environ["VIRTUAL_ENV"]).resolve(); print(sys.version); print(sys.prefix)'
+poetry install --with dashboard,dashboard-test
 ```
 
-The first command must report `false`; the second must identify the specified pyenv environment. Manage dependencies with Poetry in that activated environment:
-
-```bash
-poetry install
-```
-
-This installs the source package and the `nnets-transformer` CLI. Use `poetry add`, `poetry remove`, and the project lockfile for dependency changes. Reuse this same environment for experiments, tests, notebooks, and the dashboard; do not create another virtualenv. Avoid incidental lockfile refreshes during implementation or fresh experiments. TransformerLens is pinned to baseline Git commit `50ee38b9a20695e90b8ce6a4aa20fd509c8175d9`. Hydra/OmegaConf were added for configuration; all pre-existing locked versions/revisions were retained. The dashboard's dependencies are optional Poetry groups (`dashboard`: Dash, dash-cytoscape; `dashboard-test`: Selenium), installed with `poetry install --with dashboard` (add `,dashboard-test` for the browser test); adding them changed no existing locked version. On this machine, `POETRY_SYSTEM_GIT_CLIENT=true poetry install` avoids a Dulwich chmod failure in the pre-existing shared source checkout.
+The creation setting must report `false`. Reuse this environment for tests, experiments and the CPU dashboard. The two bootstrap-only pins keep Poetry compatible with the project’s locked dependencies; `python -m pip check` must pass after installation. Install from the existing lockfile; avoid incidental dependency upgrades or lockfile regeneration. TransformerLens remains pinned to Git commit `50ee38b9a20695e90b8ce6a4aa20fd509c8175d9`. Dashboard dependencies are optional (`--with dashboard` for serving, `--with dashboard,dashboard-test` for browser validation). `.python-version` records 3.11.0 for tooling; module loading and the explicit environment select the interpreter.
 
 Check PyTorch without downloading a model:
 
 ```bash
-poetry run python -c 'import torch; print("PyTorch:", torch.__version__); print("CUDA available:", torch.cuda.is_available())'
+poetry run -- python -c 'import torch; print("PyTorch:", torch.__version__); print("CUDA available:", torch.cuda.is_available())'
 ```
 
 The main script selects CUDA when available and otherwise uses the CPU. GPU execution needs a compatible PyTorch/CUDA installation. The expansion plan targets one H100 NVL with approximately 94 GiB of memory.
 
 **Running experiments**
 
-Every command below runs from the repository root after the environment exports above. Select the GPU with `CUDA_VISIBLE_DEVICES`; nothing in the YAMLs names a device index. Each command prints its log directory (`logs/JOB_ID/ATTEMPT_ID/`, with `console.log`, `events.jsonl`, live `status.json` and `invocation.json`) and refuses to overwrite an existing output directory unless `execution.resume=true`.
+Every command below runs from the repository root after `source scripts/cluster_env.sh`. Run GPU commands inside a Slurm allocation, for example `srun --account=tascn --partition=math --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=04:00:00 --pty bash -l`, then source the environment again. Slurm selects the GPU through `CUDA_VISIBLE_DEVICES`; preserve its setting. Full sweeps use the batch submission below. Each command prints its log directory (`logs/JOB_ID/ATTEMPT_ID/`, with `console.log`, `events.jsonl`, live `status.json` and `invocation.json`) and refuses to overwrite an existing output directory unless `execution.resume=true`.
 
 1. Check the installation without model downloads:
 
    ```bash
    poetry run -- python -m nnets_transformer.observability --job-id validation -- \
      python -u -m unittest discover -s tests -v
-   poetry run nnets-transformer --job-id inspect +experiment=pilot command=inspect   # print the resolved pilot YAML only
+   poetry run -- nnets-transformer --job-id inspect +experiment=pilot command=inspect   # print the resolved pilot YAML only
    ```
 
 2. Bounded end-to-end check on the GPU (about a minute; downloads two Pythia-14M checkpoints):
 
    ```bash
-   CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id sweep-smoke \
+   poetry run -- nnets-transformer --job-id sweep-smoke \
      +experiment=sweep_smoke resources=h100 resources.disable_optional_vision=true \
      sweep.output_root=runs/sweep-smoke-new
    ```
@@ -85,10 +73,10 @@ Every command below runs from the repository root after the environment exports 
 3. Pilot sweeps (T05): induction plus IOI/pronouns/greater-than/SVA at paper sizes (70/70/200/200; induction 128), zero/mean/matched-donor replacements, every whole component, 12 checkpoints from `step0` to `step143000`. Each checkpoint is downloaded and loaded once for all of its task × replacement cells:
 
    ```bash
-   CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id pilot-14m +experiment=pilot model=pythia_14m
-   CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id pilot-160m +experiment=pilot model=pythia_160m \
+   poetry run -- nnets-transformer --job-id pilot-14m +experiment=pilot model=pythia_14m
+   poetry run -- nnets-transformer --job-id pilot-160m +experiment=pilot model=pythia_160m \
      sweep.evict_checkpoint_cache=true
-   CUDA_VISIBLE_DEVICES=0 poetry run nnets-transformer --job-id pilot-1b +experiment=pilot model=pythia_1b \
+   poetry run -- nnets-transformer --job-id pilot-1b +experiment=pilot model=pythia_1b \
      sweep.evict_checkpoint_cache=true
    ```
 
@@ -102,20 +90,31 @@ Every command below runs from the repository root after the environment exports 
    - `model=pythia_160m_seed1` runs a training-seed replicate.
    - `resources.dtype=bfloat16` is an opt-in precision condition; FP32 is the default.
 
-   **Everything (all main Pythia models × all 154 checkpoints × 5 tasks × 6 replacements):** run `scripts/run_everything.sh` in tmux, and preview it first with `DRY_RUN=1 scripts/run_everything.sh`. It processes models smallest first and writes to `runs/full/`. After each cell it compacts the results (`sweep.compact`). Compaction keeps:
+   **Everything (all main Pythia models × all 154 checkpoints × 5 tasks × 6 replacements):** preview with `DRY_RUN=1 scripts/run_everything.sh`, then submit one Slurm job per model:
+
+   ```bash
+   # Optional: export SLURM_MAIL_USER=your-address
+   scripts/submit_full.sh --test-only          # validate scheduler requests
+   scripts/submit_full.sh                      # submit all ten models
+   # Or: MODELS="EleutherAI/pythia-1b" scripts/submit_full.sh
+   ```
+
+   [The job template](scripts/full_model.sbatch) uses account `tascn`, partition `math`, one scheduler-selected GPU, eight CPUs, 72 hours and `--get-user-env`. The probed `math03` GPU is an H100 PCIe with 81,559 MiB, and compute-node Hugging Face access works. Jobs request 64 GiB host RAM below 2.8B and 128 GiB from 2.8B upward. Intervention batches are 128 below 2.8B, 64 for 2.8B, and 32 for 6.9B/12B to allow for the smaller GPU memory than serubu03. `INTERVENTION_BATCH_SIZE` overrides this. FP32 remains the scientific default.
+
+   The advance `B:TERM@600` signal is forwarded to the active child process group. After shutdown the batch script requests `scontrol requeue`, resuming the same model when scheduled again; `AUTO_REQUEUE=0` disables this. Scientific errors and low-disk stops do not trigger that requeue path. To cancel permanently, use `scancel --signal=KILL JOB_ID`; the next invocation verifies and resumes committed shards. Scheduler output appends to `logs/slurm/influence-MODEL-JOBID.out`, alongside the shared attempt logs. Each model has an exclusive process lock; jobs for different models may run concurrently. This cluster run starts fresh; do not copy the old serubu03 `runs/full/` into it. The underlying `scripts/run_everything.sh` processes its selected models smallest first and writes to `runs/full/`. After each cell it compacts the results (`sweep.compact`). Compaction keeps:
    - the similarity matrix;
    - all per-example behavioral rows;
    - the manifests;
    - per-example cosines as float16.
 
-   It deletes the bulky float32 activation shards (relative L2 and zero-norm fields), so the whole grid needs about 115 GB instead of terabytes. A compacted cell is final: it can be exported and analysed, but not resumed. The script skips models that would not fit above `MIN_FREE_GB` (default 100), and pauses resumably if disk runs low. Ctrl+C stops it; rerunning the same command continues. This is a months-long GPU job, so expect to stop and resume it. After each model finishes, the script exports its completed cells to `exports/full/<model>/<task>/`: graph metrics, roles, edges, per-intervention behavior summaries and full provenance. The dashboard reads those exports. Run `scripts/run_everything.sh export` at any time, even while the sweep runs, to refresh the exports with everything completed so far; then click **Refresh artifacts** in the dashboard.
+   It deletes the bulky float32 activation shards (relative L2 and zero-norm fields), so the whole grid needs about 115 GB instead of terabytes. A compacted cell is final: it can be exported and analysed, but not resumed. The script skips models that would not fit above `MIN_FREE_GB` (default 100), and pauses resumably if disk runs low. Ctrl+C stops it; rerunning the same command continues. The grid spans many GPU-days, so jobs must stop and resume across allocations. After each model finishes, the script exports its completed cells to `exports/full/<model>/<task>/`: graph metrics, roles, edges, per-intervention behavior summaries and full provenance. The dashboard reads those exports. Run `scripts/run_everything.sh export` at any time, even while the sweep runs, to refresh the exports with everything completed so far; then click **Refresh artifacts** in the dashboard.
 
 4. Resume an interrupted sweep by repeating its command with `execution.resume=true`. Completed cells are skipped without loading their checkpoint, and partial cells resume from verified shards. The exact command is also saved as `resume_command` in the attempt's `status.json`. Changed code or scientific settings invalidate resume by design, so use a new `sweep.output_root` for a new condition.
 
 5. Export a trajectory (several checkpoints of one task/replacement) to normalized Parquet tables and a standalone HTML report, on CPU:
 
    ```bash
-   poetry run nnets-transformer --job-id export-pilot-14m-ioi-mean +experiment=export \
+   poetry run -- nnets-transformer --job-id export-pilot-14m-ioi-mean +experiment=export \
      "export.inputs=[$(ls -d runs/pilot/pythia-14m/step*/ioi/mean | paste -sd, -)]" \
      output_directory=exports/pilot-14m-ioi-mean
    ```
@@ -126,8 +125,8 @@ Every command below runs from the repository root after the environment exports 
 
    ```bash
    poetry install --with dashboard          # once
-   poetry run python -m nnets_transformer.dashboard import-legacy --output exports/legacy-induction   # optional: archived paper results
-   poetry run python -m nnets_transformer.dashboard serve      # http://127.0.0.1:8050/
+   poetry run -- python -m nnets_transformer.dashboard import-legacy --output exports/legacy-induction   # optional: archived paper results
+   poetry run -- python -m nnets_transformer.dashboard serve      # http://127.0.0.1:8050/
    ```
 
    From your workstation, use `ssh -L 8050:127.0.0.1:8050 SERVER`. The server binds to localhost unless `allow_remote: true` is set. The tabs are:
@@ -161,7 +160,7 @@ Every record keeps raw clean/corrupt/patched scores. Recovery `(patched - corrup
 
 Runs write `manifest.json`, `resolved.yaml`, `dataset.json` (sample, calibration and donor manifests), `inventory.json`, chunked checksummed shards `shards/*.zip` (schema `fresh-reference-v2`: JSON behavior plus float32 activation arrays), `similarities.csv` (mean per-example cosine) and `behavior.json`. Resume verifies code, config, model and dataset identities, input and shard hashes, and the work plan. Example batches align with shards, so resumed outputs are bit-identical. The optimized backend (`execution.backend=optimized`, the default in sweep presets) reuses clean and corrupt caches per example batch. It runs independent interventions in separate batch slices and agrees with the serial reference within FP32 tolerance.
 
-To validate a model adapter against the source Hugging Face model's clean logits, run `poetry run python scripts/check_clean_adapter.py --disable-optional-vision --model EleutherAI/pythia-14m --revision SHA --output runs/adapter-check.json`. The checkpoint must already be in `models/hf-cache`. See [scientific definitions](docs/scientific-definitions.md) for the versioned graph, metric and storage conventions.
+To validate a model adapter against the source Hugging Face model's clean logits, run `poetry run -- python scripts/check_clean_adapter.py --disable-optional-vision --model EleutherAI/pythia-14m --revision SHA --output runs/adapter-check.json`. The checkpoint must already be in `models/hf-cache`. See [scientific definitions](docs/scientific-definitions.md) for the versioned graph, metric and storage conventions.
 
 The test suite needs no model downloads. It uses the locally cached Pythia-14M tokenizer and the supplement for the paper-task checks, and skips them if those are absent. The dashboard browser check needs `--with dashboard-test` and Chrome. Fixture artifacts are kept under ignored `artifacts/`.
 

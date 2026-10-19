@@ -26,11 +26,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-export PYENV_VERSION=nnets-transformer
-export VIRTUAL_ENV=/data/shared/pyenv/versions/3.11.1/envs/nnets-transformer
-export PATH="$VIRTUAL_ENV/bin:$PATH"
-export POETRY_VIRTUALENVS_CREATE=false
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+source scripts/cluster_env.sh || exit 1
+# Slurm owns CUDA_VISIBLE_DEVICES; do not substitute a physical device index.
 
 OUTPUT_ROOT="${OUTPUT_ROOT:-runs/full}"
 REPLACEMENTS="${REPLACEMENTS:-zero mean mean_global donor donor_denoising donor_resample}"
@@ -58,16 +55,11 @@ EleutherAI/pythia-12b|pythia_2_8b|36|11846
 EXPORT_ROOT="${EXPORT_ROOT:-exports/full}"
 mkdir -p logs/run-everything "$OUTPUT_ROOT"
 if [ "${1:-}" = export ]; then
-    exec poetry run python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT"
+    exec poetry run -- python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT"
 fi
-LOG="logs/run-everything/$(date +%Y%m%dT%H%M%S).log"
+LOG="$(mktemp "logs/run-everything/$(date +%Y%m%dT%H%M%S).XXXXXX.log")"
 exec > >(tee -i -a "$LOG") 2>&1
-echo "run_everything: log $LOG; output $OUTPUT_ROOT; replacements [$REPLACEMENTS]; scope $SCOPE; GPU $CUDA_VISIBLE_DEVICES"
-
-if [ "$DRY_RUN" != 1 ] && pgrep -f "nnets-transformer.*(command=sweep|experiment=pilot)" >/dev/null; then
-    echo "Another sweep is already running (pgrep -af nnets-transformer). Wait for it to finish, then rerun." >&2
-    exit 1
-fi
+echo "run_everything: log $LOG; output $OUTPUT_ROOT; replacements [$REPLACEMENTS]; scope $SCOPE; GPU ${CUDA_VISIBLE_DEVICES:-scheduler default}"
 
 REPLACEMENT_LIST="[$(echo $REPLACEMENTS | tr ' ' ',')]"
 # Tasks x replacements; matched donors are undefined for induction and are skipped by the sweep.
@@ -93,20 +85,45 @@ EOF
 }
 
 STOP=0
-trap 'STOP=1; echo "run_everything: stop requested; finishing the current sweep shutdown"' INT TERM
-LOW_DISK_FLAG="$(mktemp -u)"
-if [ "$DRY_RUN" != 1 ]; then
-    # Disk guard: interrupt the running sweep (resumably) if free space falls below the floor.
-    ( while sleep 300; do
+FINAL_STATUS=0
+CHILD=""
+GUARD=""
+LOW_DISK_FLAG="$(mktemp "$OUTPUT_ROOT/.low-disk.XXXXXX")"
+rm -f "$LOW_DISK_FLAG"
+stop_child() {
+    STOP=1
+    FINAL_STATUS=143
+    echo "run_everything: stop requested; forwarding TERM to child process group ${CHILD:-none}"
+    [ -z "$CHILD" ] || kill -TERM -- "-$CHILD" 2>/dev/null || true
+}
+trap stop_child INT TERM
+trap '[ -z "$GUARD" ] || kill -TERM -- "-$GUARD" 2>/dev/null; rm -f "$LOW_DISK_FLAG"' EXIT
+watch_disk() {
+    while sleep 300; do
         if [ "$(free_gb)" -lt "$MIN_FREE_GB" ]; then
             touch "$LOW_DISK_FLAG"
-            pkill -INT -f "nnets-transformer.*full-" || true
+            kill -TERM -- "-$1" 2>/dev/null || true
             exit
         fi
-      done ) &
+    done
+}
+export -f watch_disk free_gb
+export OUTPUT_ROOT MIN_FREE_GB LOW_DISK_FLAG
+run_child() {
+    # A separate process group lets batch-shell-only Slurm signals reach the sweep.
+    setsid "$@" &
+    CHILD=$!
+    setsid bash -c 'watch_disk "$1"' _ "$CHILD" &
     GUARD=$!
-    trap 'kill $GUARD 2>/dev/null; rm -f "$LOW_DISK_FLAG"' EXIT
-fi
+    local result
+    wait "$CHILD"; result=$?
+    # wait may return immediately on a trapped signal; reap the child before exiting.
+    if [ "$STOP" = 1 ]; then wait "$CHILD" 2>/dev/null || true; result=143; fi
+    kill -TERM -- "-$GUARD" 2>/dev/null || true
+    wait "$GUARD" 2>/dev/null || true
+    CHILD=""; GUARD=""
+    return "$result"
+}
 
 printf '%-34s %6s %10s %10s  %s\n' MODEL CKPTS EST_GB FREE_GB STATUS
 for line in $CATALOG; do
@@ -115,6 +132,11 @@ for line in $CATALOG; do
     [ "$STOP" = 1 ] && break
     if [ -e "$LOW_DISK_FLAG" ]; then echo "run_everything: free space below ${MIN_FREE_GB} GB; stopping."; break; fi
     SLUG="${ID#*/}"
+    if [ "$DRY_RUN" != 1 ]; then
+        mkdir -p "$PROJECT_DIR/.cache/model-locks"
+        exec 9>"$PROJECT_DIR/.cache/model-locks/$SLUG.lock"
+        if ! flock -n 9; then echo "run_everything: $ID already has an active job"; exit 1; fi
+    fi
     CK=$(checkpoints "$ID") || { printf '%-34s %6s %10s %10s  %s\n' "$ID" "-" "-" "-" "skipped: cannot list checkpoints"; continue; }
     N=$(echo "$CK" | tr ',' '\n' | wc -l)
     FREE=$(free_gb)
@@ -142,19 +164,22 @@ for line in $CATALOG; do
     # Measured: batches of 128 interventions are 1.4-2.9x faster than 32 up to 1B; 64 keeps 2.8B-12B well
     # within GPU memory. Compacted runs keep only cosine, so only cosine is computed (identical values).
     BATCH=128; [ "$PARAMS" -gt 2000 ] && BATCH=64
+    BATCH="${INTERVENTION_BATCH_SIZE:-$BATCH}"
     METRICS=full; [ "$MODE" != none ] && METRICS=cosine
-    poetry run nnets-transformer --job-id "full-$SLUG" +experiment=pilot model="$BASE" model.id="$ID" model.n_layers="$LAYERS" \
+    run_child poetry run -- nnets-transformer --job-id "full-$SLUG" +experiment=pilot model="$BASE" model.id="$ID" model.n_layers="$LAYERS" \
         scope="$SCOPE" "sweep.checkpoints=$CK" "sweep.replacements=$REPLACEMENT_LIST" \
         execution.intervention_batch_size="$BATCH" execution.activation_metrics="$METRICS" sweep.prefetch=true \
         sweep.output_root="$OUTPUT_ROOT" sweep.evict_checkpoint_cache=true sweep.compact="$MODE" "${RESUME[@]}"
     STATUS=$?
-    if [ "$STATUS" -eq 0 ] || [ "$STATUS" -lt 128 ]; then   # export whatever this model completed
-        poetry run python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT" --model "$SLUG" \
+    if [ "$STOP" != 1 ] && [ "$STATUS" -lt 128 ]; then   # export whatever this model completed
+        run_child poetry run -- python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT" --model "$SLUG" \
             || echo "run_everything: export for $ID failed; retry with: scripts/run_everything.sh export"
     fi
     if [ "$STATUS" -ne 0 ]; then
+        FINAL_STATUS="$STATUS"
         echo "run_everything: $ID exited with $STATUS (logs/full-$SLUG/); rerun this script to resume it."
         [ "$STATUS" -ge 128 ] && STOP=1
     fi
 done
 echo "run_everything: done (stop=$STOP). Rerun the same command to resume or continue."
+exit "$FINAL_STATUS"

@@ -1,5 +1,5 @@
-# Reuse the activated nnets-transformer pyenv environment.
-# Activate it explicitly before invoking Poetry (see README.md).
+# Reuse the explicitly activated cluster project environment.
+# Source scripts/cluster_env.sh before invoking Poetry (see README.md).
 [virtualenvs]
 create = false
 in-project = false

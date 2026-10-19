@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unittest
+import uuid
 
 import pandas as pd
 
@@ -19,7 +20,7 @@ except ImportError:
 
 from test_fresh_runner import tiny, config, yaml, retained_directory
 
-FIXTURE = Path("artifacts/dashboard-fixture")
+FIXTURE = Path("artifacts/dashboard-fixture") / uuid.uuid4().hex
 
 
 def build_fixture():

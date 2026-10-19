@@ -11,7 +11,7 @@ from nnets_transformer.observability import atomic_json
 from nnets_transformer.records import Selection
 
 
-def run(config, resolved_yaml, job, *, adapter=None):
+def run(config, resolved_yaml, job, *, adapter=None, prepared_tasks=None):
     output = Path(config.output_directory)
     if output.exists() and not config.execution.resume:
         raise FileExistsError(output)
@@ -23,7 +23,8 @@ def run(config, resolved_yaml, job, *, adapter=None):
     from nnets_transformer.metrics.behavioral import score
     from nnets_transformer.metrics.activation import compare, ACTIVATION_VERSION
     job.stage("dataset_preparation", task=config.task.name)
-    examples, dataset = get_task(config.task.name).prepare(adapter, config.task)
+    examples, dataset = (prepared_tasks.prepare(adapter, config.task) if prepared_tasks is not None
+                         else get_task(config.task.name).prepare(adapter, config.task))
     observations = adapter.selections(config.scope.resolution)
     sources = [Selection(s.hook, s.head) for s in config.scope.components] if config.scope.components else observations
     if len({s.id for s in sources}) != len(sources):

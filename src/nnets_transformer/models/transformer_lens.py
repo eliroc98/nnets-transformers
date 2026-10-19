@@ -5,6 +5,7 @@ import hashlib
 
 import torch
 from nnets_transformer.records import Component, Selection
+from .inputs import padded_inputs
 
 INVENTORY_VERSION = "tl-existing-sites-v2"
 PYTHIA_TOKENS_PER_STEP = 2_097_152
@@ -75,11 +76,7 @@ class TransformerLensAdapter:
         if length > self.context_length or length < max(len(e.tokens) for e in examples):
             raise ValueError("Invalid padded context length")
         device = self.model.cfg.device
-        tokens = torch.zeros((len(examples), length), device=device, dtype=torch.long)
-        mask = torch.zeros_like(tokens, dtype=torch.bool)
-        for index, example in enumerate(examples):
-            tokens[index, :len(example.tokens)] = torch.as_tensor(example.tokens, device=device)
-            mask[index, :len(example.tokens)] = torch.as_tensor(example.attention_mask, device=device)
+        tokens, mask = padded_inputs(examples, length, device)
         grouped = {}
         for index, intervention in enumerate(interventions):
             if intervention is not None:
@@ -93,8 +90,28 @@ class TransformerLensAdapter:
             return replace
         hooks = [(name, make_hook(entries)) for name, entries in grouped.items()]
         wanted = list(dict.fromkeys(s.hook for s in observations))
-        with torch.inference_mode(), self.model.hooks(fwd_hooks=hooks):
-            logits, cache = self.model.run_with_cache(tokens, attention_mask=mask, names_filter=wanted)
+        cache, handles = {}, []
+        def capture(name):
+            def save(value, hook):
+                cache[name] = value.detach()
+            return save
+        def register(name, callback):
+            point = self.model.hook_dict[name]
+            # Native removable handles preserve unrelated/permanent TL hooks and
+            # avoid scanning/resetting every model hook point after each forward.
+            handles.append(point.register_forward_hook(
+                lambda module, args, value: callback(value, hook=module)))
+        try:
+            for name, callback in hooks:
+                register(name, callback)
+            # Cache after the replacement, as with TL run_with_cache inside hooks().
+            for name in wanted:
+                register(name, capture(name))
+            with torch.inference_mode():
+                logits = self.model(tokens, attention_mask=mask)
+        finally:
+            for handle in reversed(handles):
+                handle.remove()
         self.forward_count = getattr(self, "forward_count", 0) + 1
         return logits, {name: cache[name] for name in wanted}
 

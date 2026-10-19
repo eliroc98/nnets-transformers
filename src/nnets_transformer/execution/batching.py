@@ -3,6 +3,7 @@ from dataclasses import asdict
 import torch
 from nnets_transformer.metrics.activation import compare_batch
 from nnets_transformer.metrics.behavioral import score_batch
+from nnets_transformer.models.inputs import padded_inputs
 
 
 def records(work, pending, adapter, observations, replacement, dataset, execution, references=None):
@@ -29,6 +30,7 @@ def records(work, pending, adapter, observations, replacement, dataset, executio
             recipients, replacements = examples, [replacement]*len(examples)
             del clean_logits
         items = [item for example_id in ids for item in by_example[example_id]]
+        _, recipient_masks = padded_inputs(recipients, length, clean_cache[observations[0].hook].device)
         batch_size = execution.intervention_batch_size
         for start in range(0, len(items), batch_size):
             batch = items[start:start+batch_size]
@@ -38,9 +40,7 @@ def records(work, pending, adapter, observations, replacement, dataset, executio
                 [(s, replacements[position[e.id]]) for _, e, s in batch], pad_length=length)
             patched_scores = score_batch(logits, [e.scoring for e in batch_examples]).cpu().tolist()
             indices = torch.tensor([position[e.id] for e in batch_examples], device=logits.device)
-            masks = torch.zeros((len(batch), length), device=logits.device, dtype=torch.bool)
-            for index, example in enumerate(batch_examples):
-                masks[index, :len(example.tokens)] = torch.as_tensor(example.attention_mask, device=logits.device)
+            masks = recipient_masks.index_select(0, indices)
             if getattr(execution, "activation_metrics", "full") == "cosine":
                 import numpy as np
                 from nnets_transformer.metrics.activation import cosine_batch

@@ -156,7 +156,10 @@ class Artifacts:
             job.previous_attempt = previous
             self.manifest["attempts"].append(str(job.directory))
             self.manifest["state"] = "running"
-            atomic_json(path, self.manifest)
+            # Identity is immutable and large at head resolution. Encode it once;
+            # retain atomic per-shard durability and the existing readable schema.
+            self._identity_json = json.dumps(self.manifest["identity"], allow_nan=False, separators=(",", ":"))
+            self._save_manifest()
             job.event("resume_validated" if existed else "run_created", identity_sha256=self.identity,
                       reused_shards=len(self.manifest["shards"]), previous_attempt=previous)
         except BaseException:
@@ -171,15 +174,26 @@ class Artifacts:
         path = self.root / "shards" / f"{key}.zip"
         write_chunk(path, records, self.observation_ids)
         self.manifest["shards"][key] = {"path": f"shards/{key}.zip", "sha256": digest(path), "records": len(records)}
-        atomic_json(self.root / "manifest.json", self.manifest)
+        self._save_manifest()
         self.job.artifact(path)
 
     def finish(self, state):
         self.manifest["state"] = state
         if state == "completed":
             self.manifest["output_hashes"] = {name: digest(self.root / name) for name in ("similarities.csv", "behavior.json")}
-        atomic_json(self.root / "manifest.json", self.manifest)
+        self._save_manifest()
         self.job.artifact(self.root / "manifest.json")
+
+    def _save_manifest(self):
+        dynamic = {k: v for k, v in self.manifest.items() if k != "identity"}
+        temporary = self.root / "manifest.tmp"
+        with temporary.open("w") as handle:
+            handle.write('{"identity":')
+            handle.write(self._identity_json)
+            handle.write(",")
+            handle.write(json.dumps(dynamic, allow_nan=False, separators=(",", ":"))[1:])
+            handle.write("\n")
+        os.replace(temporary, self.root / "manifest.json")
 
     def arrays(self):
         """Committed records' metadata and stacked activation metrics, in planned order."""
