@@ -90,18 +90,19 @@ Every command below runs from the repository root after `source scripts/cluster_
    - `model=pythia_160m_seed1` runs a training-seed replicate.
    - `resources.dtype=bfloat16` is an opt-in precision condition; FP32 is the default.
 
-   **Everything (all main Pythia models × all 154 checkpoints × 5 tasks × 6 replacements):** preview with `DRY_RUN=1 scripts/run_everything.sh`, then submit one Slurm job per model:
+   **Everything (all main Pythia models × all 154 checkpoints × 5 tasks × 6 replacements):** preview with `DRY_RUN=1 scripts/run_everything.sh`, then submit the Slurm array (one task per model):
 
    ```bash
-   # Optional: export SLURM_MAIL_USER=your-address
-   scripts/submit_full.sh --test-only          # validate scheduler requests
-   scripts/submit_full.sh                      # submit all ten models
-   # Or: MODELS="EleutherAI/pythia-1b" scripts/submit_full.sh
+   mkdir -p logs/slurm
+   sbatch --test-only scripts/run_all.sbatch    # validate without submitting
+   sbatch scripts/run_all.sbatch               # all ten models, up to four at once
+   # Alternative for one model (64G for small models, 128G for large):
+   # MODELS="EleutherAI/pythia-1b" scripts/submit_full.sh
    ```
 
-   [The job template](scripts/full_model.sbatch) uses account `tascn`, partition `math`, one scheduler-selected GPU, eight CPUs, 72 hours and `--get-user-env`. The probed `math03` GPU is an H100 PCIe with 81,559 MiB, and compute-node Hugging Face access works. Jobs request 64 GiB host RAM below 2.8B and 128 GiB from 2.8B upward. Intervention batches are 128 below 2.8B, 64 for 2.8B, and 32 for 6.9B/12B to allow for the smaller GPU memory than serubu03. `INTERVENTION_BATCH_SIZE` overrides this. FP32 remains the scientific default.
+   [The array template](scripts/run_all.sbatch) follows the cluster sbatch template: account `TasCN`, partition `math`, one scheduler-selected GPU per model, 16 CPUs, 128 GiB host RAM, 72 hours, `--get-user-env`, separate output/error logs and `ALL` notifications to `elisabetta.rocchetti@unimi.it`. It runs at most four tasks concurrently, matching the account limit. It delegates execution and requeue handling to [the shared job wrapper](scripts/full_model.sbatch). Choose either the array or `submit_full.sh` for a given full run. The probed `math03` GPU is an H100 PCIe with 81,559 MiB, and compute-node Hugging Face access works. The array reserves 128 GiB for every task to cover 12B. The alternative `submit_full.sh` requests 64 GiB below 2.8B and 128 GiB from 2.8B upward; `SLURM_MAIL_USER` can override its notification address. Intervention batches are 128 below 2.8B, 64 for 2.8B, and 32 for 6.9B/12B to allow for the smaller GPU memory than serubu03. `INTERVENTION_BATCH_SIZE` overrides this. FP32 remains the scientific default.
 
-   The advance `B:TERM@600` signal is forwarded to the active child process group. After shutdown the batch script requests `scontrol requeue`, resuming the same model when scheduled again; `AUTO_REQUEUE=0` disables this. Scientific errors and low-disk stops do not trigger that requeue path. To cancel permanently, use `scancel --signal=KILL JOB_ID`; the next invocation verifies and resumes committed shards. Scheduler output appends to `logs/slurm/influence-MODEL-JOBID.out`, alongside the shared attempt logs. Each model has an exclusive process lock; jobs for different models may run concurrently. This cluster run starts fresh; do not copy the old serubu03 `runs/full/` into it. The underlying `scripts/run_everything.sh` processes its selected models smallest first and writes to `runs/full/`. After each cell it compacts the results (`sweep.compact`). Compaction keeps:
+   The advance `B:TERM@600` signal is forwarded to the active child process group. After shutdown the batch script requests `scontrol requeue`, resuming the same model when scheduled again; `AUTO_REQUEUE=0` disables this. Scientific errors and low-disk stops do not trigger that requeue path. To cancel permanently, use `scancel --signal=KILL JOB_ID`; the next invocation verifies and resumes committed shards. Array output/error append to `logs/slurm/full-grid_ARRAYID_TASKID.{out,err}`; individual submissions use `logs/slurm/influence-MODEL-JOBID.out`, alongside the shared attempt logs. Each model has an exclusive process lock; jobs for different models may run concurrently. This cluster run starts fresh; do not copy the old serubu03 `runs/full/` into it. The underlying `scripts/run_everything.sh` processes its selected models smallest first and writes to `runs/full/`. After each cell it compacts the results (`sweep.compact`). Compaction keeps:
    - the similarity matrix;
    - all per-example behavioral rows;
    - the manifests;

@@ -3,14 +3,15 @@
 #SBATCH --account=tascn
 #SBATCH --partition=math
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=72:00:00
 #SBATCH --signal=B:TERM@600
 #SBATCH --requeue
 #SBATCH --get-user-env
 #SBATCH --open-mode=append
-#SBATCH --mail-type=FAIL
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=elisabetta.rocchetti@unimi.it
 set -uo pipefail
 cd "${PROJECT_DIR:?submit_full.sh must supply PROJECT_DIR}"
 source scripts/cluster_env.sh || exit 1

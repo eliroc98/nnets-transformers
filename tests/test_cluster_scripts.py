@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -58,6 +59,11 @@ exec "${command[@]}"
                         process.communicate()
 
     def test_model_lock_and_batch_shell_signal_forwarding(self):
+        for wrapped in (False, True):
+            with self.subTest(outer_job_logger=wrapped):
+                self._model_lock_and_signal(wrapped)
+
+    def _model_lock_and_signal(self, wrapped):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "scripts").mkdir()
@@ -79,7 +85,9 @@ wait
                 path.chmod(0o755)
             env = {**os.environ, "MODELS": "EleutherAI/pythia-14m", "MIN_FREE_GB": "0", "KEEP": "means"}
             command = ["bash", "scripts/run_everything.sh"]
-            first = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
+            launch = ([sys.executable, "-m", "nnets_transformer.observability", "--job-id", "shell-signal",
+                       "--log-root", str(root / "wrapper-logs"), "--", *command] if wrapped else command)
+            first = subprocess.Popen(launch, cwd=root, env=env, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, text=True, start_new_session=True)
             try:
                 deadline = time.monotonic()+10

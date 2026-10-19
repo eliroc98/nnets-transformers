@@ -58,7 +58,9 @@ if [ "${1:-}" = export ]; then
     exec poetry run -- python -u scripts/export_results.py --runs "$OUTPUT_ROOT" --exports "$EXPORT_ROOT"
 fi
 LOG="$(mktemp "logs/run-everything/$(date +%Y%m%dT%H%M%S).XXXXXX.log")"
-exec > >(tee -i -a "$LOG") 2>&1
+# The outer Job logger signals this process group on shutdown. Keep tee alive
+# while the shell forwards TERM and the sweep writes its final status/logs.
+exec > >(trap '' TERM INT; exec tee -i -a "$LOG") 2>&1
 echo "run_everything: log $LOG; output $OUTPUT_ROOT; replacements [$REPLACEMENTS]; scope $SCOPE; GPU ${CUDA_VISIBLE_DEVICES:-scheduler default}"
 
 REPLACEMENT_LIST="[$(echo $REPLACEMENTS | tr ' ' ',')]"
